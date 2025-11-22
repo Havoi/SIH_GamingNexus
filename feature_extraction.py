@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from collections import Counter
 
-INPUT_CSV = "labeled_stream_3class.csv"
+INPUT_CSV = "labeled_stream_3class_main.csv"
 OUTPUT_CSV = "emg_features_3class.csv"
 
 # 1. Load data
@@ -16,8 +16,8 @@ fs = 1.0 / median_dt
 print("Estimated sampling rate:", fs, "Hz")
 
 # 3. Define window + step (in seconds)
-window_sec = 4      # 1-second window
-step_sec = 0.3        # 50% overlap
+window_sec = 1      # 1-second window
+step_sec = 0.5       # 50% overlap
 
 win_size = int(window_sec * fs)
 step_size = int(step_sec * fs)

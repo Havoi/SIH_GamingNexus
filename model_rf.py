@@ -9,7 +9,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 import joblib
 
 # ===================== CONFIG =====================
-FEATURE_CSV = "emg_features_3class.csv"
+FEATURE_CSV = "emg_features_3class_main.csv"
 MODEL_PATH  = "emg_wrist_rf_model.pkl"
 LABEL_ENCODER_PATH = "emg_label_encoder.pkl"
 # ==================================================

@@ -8,7 +8,7 @@ import joblib
 import xgboost as xgb
 
 # ===================== CONFIG =====================
-FEATURE_CSV = "emg_features_3class.csv"
+FEATURE_CSV = "emg_features_3class_main.csv"
 MODEL_PATH  = "emg_wrist_xgb_model.pkl"
 LABEL_ENCODER_PATH = "emg_label_encoder.pkl"
 # ==================================================
