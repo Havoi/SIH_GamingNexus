@@ -23,7 +23,7 @@ import numpy as np
 # ================= USER CONFIG =================
 COM_PORT = 'COM5'
 BAUD_RATE = 115200
-MAX_SAMPLES = 500        # history shown on screen
+MAX_SAMPLES = 1000        # history shown on screen
 Y_MIN = 0
 Y_MAX = 1024
 OUTPUT_CSV = "labeled_stream_3class.csv"

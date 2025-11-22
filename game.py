@@ -9,13 +9,13 @@ import joblib
 COM_PORT = "COM5"            # change to your port (e.g. "COM3", "/dev/ttyUSB0")
 BAUD_RATE = 115200
 
-MODEL_PATH = "emg_wrist_model.pkl"      # or your LR model
+MODEL_PATH = "emg_wrist_rf_model.pkl"      # or your LR model
 LABEL_ENCODER_PATH = "emg_label_encoder.pkl"
 
 # Window settings (MUST match how you trained features!)
 # Example: if you trained with ~5 Hz and 1s windows -> win_size ~ 4-5
-WIN_SIZE = 4      # number of samples per EMG window
-STEP_SIZE = 2     # new prediction every STEP_SIZE samples
+WIN_SIZE = 20      # number of samples per EMG window
+STEP_SIZE = 1.5   # new prediction every STEP_SIZE samples
 
 # Game settings
 SCREEN_WIDTH = 800

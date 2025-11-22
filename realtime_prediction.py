@@ -13,8 +13,8 @@ LABEL_ENCODER_PATH = "emg_label_encoder.pkl"
 
 # Window settings (MUST match how you trained features)
 # Example: if you used ~5 Hz sampling and 1s window => win_size ~ 5
-WIN_SIZE = 4      # number of samples per window
-STEP_SIZE = 2     # slide window by this many samples
+WIN_SIZE = 20      # number of samples per window
+STEP_SIZE = 1.5     # slide window by this many samples
 # ====================================================
 
 

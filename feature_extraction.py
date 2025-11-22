@@ -16,8 +16,8 @@ fs = 1.0 / median_dt
 print("Estimated sampling rate:", fs, "Hz")
 
 # 3. Define window + step (in seconds)
-window_sec = 1.0      # 1-second window
-step_sec = 0.5        # 50% overlap
+window_sec = 4      # 1-second window
+step_sec = 0.3        # 50% overlap
 
 win_size = int(window_sec * fs)
 step_size = int(step_sec * fs)
