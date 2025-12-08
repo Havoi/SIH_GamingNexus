@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMU FPS Camera Control</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        
+        /* CROSSHAIR */
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
+            transform: translate(-50%, -50%); pointer-events: none; z-index: 100;
+        }
+        #crosshair::before, #crosshair::after {
+            content: ''; position: absolute; background: #00ff00;
+        }
+        #crosshair::before { top: 9px; left: 0; width: 20px; height: 2px; } /* Horiz */
+        #crosshair::after { top: 0; left: 9px; width: 2px; height: 20px; } /* Vert */
+
+        /* HUD / UI */
+        #hud {
+            position: absolute; bottom: 20px; left: 20px; z-index: 10;
+            color: #00ff00; font-family: monospace; font-size: 14px;
+            background: rgba(0, 0, 0, 0.5); padding: 10px; border-radius: 4px;
+        }
+        
+        /* SETTINGS PANEL */
+        #controls {
+            position: absolute; top: 10px; right: 10px; width: 250px;
+            background: rgba(0,0,0,0.8); color: white; padding: 15px;
+            border: 1px solid #333; border-radius: 8px; font-size: 12px;
+        }
+        button {
+            width: 100%; padding: 8px; margin-top: 5px; background: #333; color: white;
+            border: 1px solid #555; cursor: pointer; font-weight: bold;
+        }
+        button:hover { background: #444; }
+        button#btn-connect { background: #0088ff; color: white; }
+        
+        .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+        select { background: #222; color: #fff; border: 1px solid #555; width: 60px;}
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="crosshair"></div>
+
+    <div id="hud">
+        STATUS: <span id="status">Disconnected</span><br>
+        PITCH: <span id="val-pitch">0</span>&deg;<br>
+        YAW: <span id="val-yaw">0</span>&deg;
+    </div>
+
+    <div id="controls">
+        <h3>FPS Controller Setup</h3>
+        <button id="btn-connect">CONNECT IMU</button>
+        <button id="btn-tare" disabled>CENTER VIEW (Tare)</button>
+        
+        <h4 style="margin-bottom:5px; margin-top:15px; color:#aaa;">Axis Mapping</h4>
+        <div class="row"><span>Pitch (Look Up/Down)</span><select id="map-x"><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select><input type="checkbox" id="inv-x">Inv</div>
+        <div class="row"><span>Yaw (Look Left/Right)</span><select id="map-y"><option value="x">X</option><option value="y">Y</option><option value="z" selected>Z</option></select><input type="checkbox" id="inv-y">Inv</div>
+        <div class="row"><span>Roll (Tilt Head)</span><select id="map-z"><option value="x">X</option><option value="y" selected>Y</option><option value="z">Z</option></select><input type="checkbox" id="inv-z" checked>Inv</div>
+    </div>
+
+    <script>
+        // --- 1. THREE.JS WORLD SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050505);
+        scene.fog = new THREE.Fog(0x050505, 1, 30);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // CREATE A LEVEL TO LOOK AT
+        // Floor
+        const floorGeo = new THREE.PlaneGeometry(100, 100);
+        const floorMat = new THREE.MeshBasicMaterial({ color: 0x111111, side: THREE.DoubleSide });
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = Math.PI / 2;
+        floor.position.y = -2;
+        scene.add(floor);
+
+        // Grid
+        const grid = new THREE.GridHelper(100, 50, 0x00ff00, 0x111111);
+        grid.position.y = -1.99;
+        scene.add(grid);
+
+        // Random Pillars (Targets)
+        const geo = new THREE.BoxGeometry(1, 4, 1);
+        const mat = new THREE.MeshNormalMaterial(); // Uses normal colors for easy orientation
+        
+        for(let i=0; i<20; i++) {
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.x = (Math.random() - 0.5) * 40;
+            mesh.position.z = (Math.random() - 0.5) * 40 - 10; // Keep them mostly in front
+            mesh.position.y = 0;
+            scene.add(mesh);
+        }
+
+        // --- 2. LOGIC & VARS ---
+        let port, reader, inputDone;
+        let imuData = { w: 1, x: 0, y: 0, z: 0 };
+        let buffer = "";
+        
+        // Quaternions
+        const targetQuat = new THREE.Quaternion();
+        const correctionQuat = new THREE.Quaternion(); // The "Tare" matrix
+        
+        // UI Refs
+        const statusSpan = document.getElementById('status');
+        const pitchSpan = document.getElementById('val-pitch');
+        const yawSpan = document.getElementById('val-yaw');
+        const btnConnect = document.getElementById('btn-connect');
+        const btnTare = document.getElementById('btn-tare');
+
+        // --- 3. SERIAL CONNECTION ---
+        btnConnect.addEventListener('click', async () => {
+            if ("serial" in navigator) {
+                try {
+                    port = await navigator.serial.requestPort();
+                    await port.open({ baudRate: 115200 });
+                    statusSpan.innerText = "Connected";
+                    statusSpan.style.color = "#00ff00";
+                    btnConnect.style.display = 'none';
+                    btnTare.disabled = false;
+                    readSerial();
+                } catch (err) { alert("Connect Error: " + err); }
+            }
+        });
+
+        async function readSerial() {
+            const decoder = new TextDecoderStream();
+            port.readable.pipeTo(decoder.writable);
+            const reader = decoder.readable.getReader();
+            
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                if (value) {
+                    buffer += value;
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+                    for (const line of lines) processLine(line);
+                }
+            }
+        }
+
+        function processLine(line) {
+            try {
+                const d = JSON.parse(line);
+                if (d.type === "imu") {
+                    imuData = { w: d.quat[0], x: d.quat[1], y: d.quat[2], z: d.quat[3] };
+                    updateCameraOrientation();
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        // --- 4. CORE MAPPING LOGIC ---
+        function getMapping() {
+            return {
+                x: { src: document.getElementById('map-x').value, inv: document.getElementById('inv-x').checked ? -1 : 1 },
+                y: { src: document.getElementById('map-y').value, inv: document.getElementById('inv-y').checked ? -1 : 1 },
+                z: { src: document.getElementById('map-z').value, inv: document.getElementById('inv-z').checked ? -1 : 1 }
+            };
+        }
+
+        function updateCameraOrientation() {
+            const map = getMapping();
+            const raw = { x: imuData.x, y: imuData.y, z: imuData.z };
+
+            // 1. Map Raw to ThreeJS Axes
+            // Note: Camera looks down -Z. 
+            const finalX = raw[map.x.src] * map.x.inv;
+            const finalY = raw[map.y.src] * map.y.inv;
+            const finalZ = raw[map.z.src] * map.z.inv;
+
+            // 2. Create Quaternion
+            const rawQuat = new THREE.Quaternion(finalX, finalY, finalZ, imuData.w).normalize();
+            
+            // 3. Apply Calibration (Tare)
+            // Logic: Target = Tare_Inverse * Raw
+            targetQuat.copy(correctionQuat).multiply(rawQuat);
+
+            // 4. Update HUD Numbers (Euler for humans)
+            const euler = new THREE.Euler().setFromQuaternion(targetQuat, 'YXZ');
+            pitchSpan.innerText = Math.round(THREE.MathUtils.radToDeg(euler.x));
+            yawSpan.innerText = Math.round(THREE.MathUtils.radToDeg(euler.y));
+        }
+
+        // --- 5. TARE FUNCTION ---
+        btnTare.addEventListener('click', () => {
+            // To center the view, we want the current Raw Quaternion to result in "Identity" (No rotation)
+            // So: Correction * Raw = Identity
+            // Therefore: Correction = Raw_Inverse
+            
+            // Re-calculate the current RAW quaternion based on current mapping
+            const map = getMapping();
+            const raw = { x: imuData.x, y: imuData.y, z: imuData.z };
+            const currentRaw = new THREE.Quaternion(
+                raw[map.x.src] * map.x.inv,
+                raw[map.y.src] * map.y.inv,
+                raw[map.z.src] * map.z.inv,
+                imuData.w
+            ).normalize();
+
+            // Set correction to the inverse of current raw
+            correctionQuat.copy(currentRaw).invert();
+            
+            console.log("View Centered!");
+        });
+
+        // --- 6. RENDER LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            // Smoothly move camera to target
+            camera.quaternion.slerp(targetQuat, 0.5); // 0.5 = fast response for games
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Resize handler
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>
