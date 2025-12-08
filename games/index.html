@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Sky Bound</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #222;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Courier New', Courier, monospace;
+            color: white;
+            overflow: hidden;
+        }
+
+        canvas {
+            background: linear-gradient(to bottom, #87CEEB, #E0F7FA); /* Sky to Horizon */
+            border: 4px solid #fff;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            display: block;
+        }
+
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            text-align: center;
+            opacity: 0.9;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+<div class="controls">Press <b>SPACEBAR</b> (or tap) to fly</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // --- Game Constants ---
+    const GRAVITY = 0.1;
+    const JUMP_STRENGTH = -5.5; // Negative pulls it up
+    const BIRD_SIZE = 20;
+
+    // --- Game State ---
+    let gameActive = false;
+    let score = 0; // Represents distance travelled (frames)
+    let frames = 0;
+
+    // --- The Bird Object ---
+    const bird = {
+        x: 50,
+        y: canvas.height / 2,
+        velocity: 0,
+        color: '#FFD700', // Gold
+        draw: function() {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, BIRD_SIZE / 2, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Simple Eye
+            ctx.beginPath();
+            ctx.fillStyle = 'black';
+            ctx.arc(this.x + 5, this.y - 5, 2, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Simple Beak
+            ctx.beginPath();
+            ctx.fillStyle = 'orange';
+            ctx.moveTo(this.x + 8, this.y);
+            ctx.lineTo(this.x + 15, this.y + 3);
+            ctx.lineTo(this.x + 8, this.y + 6);
+            ctx.fill();
+        },
+        update: function() {
+            this.velocity += GRAVITY;
+            this.y += this.velocity;
+        },
+        reset: function() {
+            this.y = canvas.height / 2;
+            this.velocity = 0;
+        }
+    };
+
+    // --- Input Handling ---
+    function handleJumpStart() {
+        // If game not active, start + give an initial jump so it feels responsive
+        if (!gameActive) {
+            resetGame();
+            bird.velocity = JUMP_STRENGTH;
+        } else {
+            bird.velocity = JUMP_STRENGTH;
+        }
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.code === "Space") {
+            e.preventDefault(); // stop page from scrolling
+            handleJumpStart();
+        }
+    });
+
+    // Mobile / touch support
+    document.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        handleJumpStart();
+    }, {passive: false});
+
+    // --- Core Logic ---
+    function update() {
+        if (!gameActive) return;
+
+        bird.update();
+
+        // Calculate "Distance" score (1 point per frame survived)
+        score++;
+        frames++;
+
+        // Collision Detection
+        // 1. Hit the Ground
+        if (bird.y + BIRD_SIZE/2 >= canvas.height) {
+            bird.y = canvas.height - BIRD_SIZE/2; // Clamp to floor
+            gameOver("You hit the ground!");
+        }
+        // 2. Hit the Sky
+        else if (bird.y - BIRD_SIZE/2 <= 0) {
+            bird.y = BIRD_SIZE/2; // Clamp to ceiling
+            gameOver("You flew too high!");
+        }
+    }
+
+    // --- Rendering ---
+    function draw() {
+        // Clear Screen
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw Bird
+        bird.draw();
+
+        // Draw Score (Distance)
+        ctx.fillStyle = '#000';
+        ctx.font = '20px Arial';
+        // show distance in "meters" by scaling frames (arbitrary: /10)
+        ctx.fillText(`Distance: ${Math.floor(score / 10)}m`, 10, 30);
+
+        // Draw Start/End Screens
+        if (!gameActive) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = 'white';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            if (score === 0) {
+                ctx.font = '30px Arial';
+                ctx.fillText("READY?", canvas.width/2, canvas.height/2 - 20);
+                ctx.font = '20px Arial';
+                ctx.fillText("Press SPACE to Start", canvas.width/2, canvas.height/2 + 20);
+            } else {
+                ctx.font = '40px Arial';
+                ctx.fillText("GAME OVER", canvas.width/2, canvas.height/2 - 40);
+                ctx.font = '22px Arial';
+                ctx.fillText(`Total Distance: ${Math.floor(score / 10)}m`, canvas.width/2, canvas.height/2 + 0);
+                ctx.font = '16px Arial';
+                ctx.fillText("Press SPACE to Restart", canvas.width/2, canvas.height/2 + 50);
+            }
+            // Reset alignment for in-game drawing
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'alphabetic';
+        }
+    }
+
+    // --- Game Loop ---
+    function loop() {
+        update();
+        draw();
+        requestAnimationFrame(loop);
+    }
+
+    function gameOver(reason) {
+        gameActive = false;
+        console.log(reason); // For debugging
+        // keep score so the game over screen can show it
+    }
+
+    function resetGame() {
+        bird.reset();
+        score = 0;
+        frames = 0;
+        gameActive = true;
+    }
+
+    // Start the loop
+    loop();
+</script>
+</body>
+</html>

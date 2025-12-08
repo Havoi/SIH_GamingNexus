@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mario Endless Runner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        body {
+            background-color: #0d1117;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            font-family: 'Press Start 2P', monospace;
+        }
+
+        .game-container {
+            background: linear-gradient(to bottom, #6B8EAD 50%, #7CFC00 50%); /* Sky and Ground */
+            border: 8px solid #A52A2A;
+            border-radius: 12px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5), inset 0 0 15px rgba(255, 255, 255, 0.5);
+            max-width: 90vw;
+            width: 800px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 10px;
+        }
+
+        #gameCanvas {
+            width: 100%;
+            height: auto;
+            display: block;
+            background-color: transparent; /* Canvas background is handled by container gradient */
+            border-radius: 8px;
+        }
+
+        .ui-panel {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            padding: 10px 0;
+            color: #FFD700;
+            text-shadow: 2px 2px #000;
+            font-size: 0.8rem;
+        }
+
+        .game-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px 40px;
+            border-radius: 10px;
+            text-align: center;
+            font-size: 1.2rem;
+            display: none;
+            z-index: 10;
+        }
+
+        .styled-button {
+            padding: 10px 20px;
+            background-color: #FF0000;
+            color: white;
+            border: 4px solid #A52A2A;
+            border-radius: 8px;
+            font-family: 'Press Start 2P', monospace;
+            cursor: pointer;
+            transition: all 0.1s ease;
+            box-shadow: 0 4px #A52A2A;
+        }
+
+        .styled-button:hover {
+            background-color: #A50000;
+        }
+
+        .styled-button:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 #A52A2A;
+        }
+    </style>
+</head>
+<body>
+
+<div class="game-container">
+    <div class="ui-panel">
+        <div id="scoreDisplay">SCORE: 0</div>
+        <div id="highScoreDisplay">HI: 0</div>
+    </div>
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+    <div id="controls" class="p-4 w-full flex justify-center space-x-4">
+        <button id="startButton" class="styled-button">Start Game (Space)</button>
+    </div>
+    <div id="messageBox" class="game-message">
+        Game Over!
+        <br><br>
+        <div id="finalScore"></div>
+        <button id="restartButton" class="styled-button mt-4">Restart (Space)</button>
+    </div>
+</div>
+
+<script type="module">
+    // --- Firebase Initialization Boilerplate (Required but not strictly used for this single-player game) ---
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+    let db, auth;
+    let userId = 'anonymous';
+
+    if (firebaseConfig) {
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    userId = user.uid;
+                    // Optional: Load high score from Firestore
+                    loadHighScore();
+                } else {
+                    userId = 'anonymous';
+                }
+            });
+
+            async function authenticate() {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            }
+            authenticate();
+
+        } catch (e) {
+            console.error("Firebase initialization failed:", e);
+        }
+    }
+    // -------------------------------------------------------------------------------------------------
+
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreDisplay = document.getElementById('scoreDisplay');
+    const highScoreDisplay = document.getElementById('highScoreDisplay');
+    const startButton = document.getElementById('startButton');
+    const restartButton = document.getElementById('restartButton');
+    const messageBox = document.getElementById('messageBox');
+    const finalScore = document.getElementById('finalScore');
+
+    // Game Constants
+    const CANVAS_WIDTH = 800;
+    const CANVAS_HEIGHT = 400;
+    const GROUND_HEIGHT = 50;
+    const MARIO_SIZE = 40; // Base size for Mario
+    const JUMP_VELOCITY = -18;
+    const GRAVITY = 1.2;
+    let GAME_SPEED = 6;
+    const GAME_SPEED_INCREASE_RATE = 0.005;
+
+    // Game State
+    let isGameRunning = false;
+    let score = 0;
+    let highScore = 0;
+    let animationFrameId;
+
+    // Player Object
+    const player = {
+        x: 50,
+        y: CANVAS_HEIGHT - GROUND_HEIGHT - MARIO_SIZE,
+        width: MARIO_SIZE * 0.75, // Adjust width relative to height
+        height: MARIO_SIZE,
+        vy: 0,
+        isJumping: false,
+        groundY: CANVAS_HEIGHT - GROUND_HEIGHT - MARIO_SIZE,
+        draw() {
+            const mX = this.x;
+            const mY = this.y;
+            const mW = this.width;
+            const mH = this.height;
+
+            // Define colors
+            const skinColorLight = '#FFDBAC';
+            const skinColorDark = '#E0B589';
+            const redColorLight = '#FF4444';
+            const redColorDark = '#CC0000';
+            const blueColorLight = '#4444FF';
+            const blueColorDark = '#0000CC';
+            const brownColor = '#654321';
+            const whiteColor = '#FFFFFF';
+            const blackColor = '#000000';
+
+            // --- Head ---
+            // Face
+            let faceGradient = ctx.createLinearGradient(mX, mY, mX + mW, mY + mH * 0.3);
+            faceGradient.addColorStop(0, skinColorLight);
+            faceGradient.addColorStop(1, skinColorDark);
+            ctx.fillStyle = faceGradient;
+            ctx.fillRect(mX + mW * 0.2, mY, mW * 0.7, mH * 0.3); // Face shape
+
+            // Moustache
+            ctx.fillStyle = brownColor;
+            ctx.fillRect(mX + mW * 0.25, mY + mH * 0.2, mW * 0.5, mH * 0.1);
+
+            // Cap (Red)
+            let capGradient = ctx.createLinearGradient(mX, mY, mX + mW, mY + mH * 0.2);
+            capGradient.addColorStop(0, redColorLight);
+            capGradient.addColorStop(1, redColorDark);
+            ctx.fillStyle = capGradient;
+            ctx.fillRect(mX + mW * 0.1, mY - mH * 0.1, mW * 0.8, mH * 0.2); // Main cap
+            ctx.beginPath();
+            ctx.arc(mX + mW * 0.5, mY - mH * 0.05, mW * 0.35, Math.PI, Math.PI * 2, false); // Cap brim
+            ctx.fill();
+
+            // Hair/Sideburns
+            ctx.fillStyle = brownColor;
+            ctx.fillRect(mX + mW * 0.1, mY + mH * 0.05, mW * 0.15, mH * 0.25); // Left sideburn
+            ctx.fillRect(mX + mW * 0.75, mY + mH * 0.05, mW * 0.15, mH * 0.25); // Right sideburn
+
+            // Eyes
+            ctx.fillStyle = whiteColor;
+            ctx.fillRect(mX + mW * 0.3, mY + mH * 0.1, mW * 0.15, mH * 0.1);
+            ctx.fillRect(mX + mW * 0.55, mY + mH * 0.1, mW * 0.15, mH * 0.1);
+            ctx.fillStyle = blackColor;
+            ctx.fillRect(mX + mW * 0.35, mY + mH * 0.12, mW * 0.05, mH * 0.05);
+            ctx.fillRect(mX + mW * 0.6, mY + mH * 0.12, mW * 0.05, mH * 0.05);
+
+            // --- Torso (Red Shirt) ---
+            let shirtGradient = ctx.createLinearGradient(mX, mY + mH * 0.3, mX + mW, mY + mH * 0.6);
+            shirtGradient.addColorStop(0, redColorLight);
+            shirtGradient.addColorStop(1, redColorDark);
+            ctx.fillStyle = shirtGradient;
+            ctx.fillRect(mX, mY + mH * 0.3, mW, mH * 0.3);
+
+            // --- Overalls (Blue) ---
+            let overallsGradient = ctx.createLinearGradient(mX, mY + mH * 0.6, mX + mW, mY + mH);
+            overallsGradient.addColorStop(0, blueColorLight);
+            overallsGradient.addColorStop(1, blueColorDark);
+            ctx.fillStyle = overallsGradient;
+            ctx.fillRect(mX, mY + mH * 0.6, mW, mH * 0.4);
+
+            // Overalls Straps
+            ctx.fillStyle = blueColorDark;
+            ctx.fillRect(mX + mW * 0.1, mY + mH * 0.5, mW * 0.1, mH * 0.15); // Left strap
+            ctx.fillRect(mX + mW * 0.8, mY + mH * 0.5, mW * 0.1, mH * 0.15); // Right strap
+
+            // Buttons
+            ctx.fillStyle = 'gold';
+            ctx.beginPath();
+            ctx.arc(mX + mW * 0.15, mY + mH * 0.65, 3, 0, Math.PI * 2);
+            ctx.arc(mX + mW * 0.85, mY + mH * 0.65, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            // --- Legs (Part of Overalls) ---
+            // ctx.fillRect handled by overall body
+
+            // --- Shoes (Brown) ---
+            ctx.fillStyle = brownColor;
+            ctx.fillRect(mX, mY + mH - 5, mW, 5); // Bottom line for shoes
+        },
+        jump() {
+            if (!this.isJumping) {
+                this.isJumping = true;
+                this.vy = JUMP_VELOCITY;
+            }
+        },
+        update() {
+            if (this.isJumping) {
+                this.y += this.vy;
+                this.vy += GRAVITY;
+
+                // Check for landing
+                if (this.y >= this.groundY) {
+                    this.y = this.groundY;
+                    this.isJumping = false;
+                    this.vy = 0;
+                }
+            }
+        }
+    };
+
+    // Obstacle List and Generation
+    let obstacles = [];
+    let obstacleTimer = 0;
+    let obstacleInterval = 90; // Frames between obstacles
+
+    class Pipe {
+        constructor(x, width, height) {
+            this.x = x;
+            this.y = CANVAS_HEIGHT - GROUND_HEIGHT - height;
+            this.width = width;
+            this.height = height;
+            this.passed = false;
+        }
+
+        draw() {
+            // Pipe body (Green) with gradient
+            let pipeGradient = ctx.createLinearGradient(this.x, this.y, this.x + this.width, this.y + this.height);
+            pipeGradient.addColorStop(0, '#00C000'); // Lighter green
+            pipeGradient.addColorStop(0.5, '#008000'); // Standard green
+            pipeGradient.addColorStop(1, '#006000'); // Darker green
+            ctx.fillStyle = pipeGradient;
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            
+            // Pipe top (Darker Green) with highlight
+            let pipeTopGradient = ctx.createLinearGradient(this.x, this.y - 10, this.x + this.width + 10, this.y);
+            pipeTopGradient.addColorStop(0, '#00D000'); // Highlight
+            pipeTopGradient.addColorStop(0.5, '#009000'); // Standard
+            pipeTopGradient.addColorStop(1, '#007000'); // Shadow
+            ctx.fillStyle = pipeTopGradient;
+            ctx.fillRect(this.x - 5, this.y - 10, this.width + 10, 10);
+            
+            // Outline for a slightly more defined look
+            ctx.strokeStyle = '#005000';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(this.x, this.y, this.width, this.height);
+            ctx.beginPath();
+            ctx.moveTo(this.x - 5, this.y - 10);
+            ctx.lineTo(this.x + this.width + 5, this.y - 10);
+            ctx.lineTo(this.x + this.width + 5, this.y);
+            ctx.lineTo(this.x - 5, this.y);
+            ctx.closePath();
+            ctx.stroke();
+        }
+
+        update() {
+            this.x -= GAME_SPEED;
+        }
+    }
+
+    function generateObstacle() {
+        const minHeight = 40;
+        const maxHeight = 100;
+        const minWidth = 30;
+        const maxWidth = 50;
+
+        const height = Math.random() * (maxHeight - minHeight) + minHeight;
+        const width = Math.random() * (maxWidth - minWidth) + minWidth;
+
+        obstacles.push(new Pipe(CANVAS_WIDTH, width, height));
+
+        // Adjust interval for difficulty
+        obstacleInterval = Math.max(50, 90 - Math.floor(score / 50));
+    }
+
+    // Drawing Functions
+    function drawGround() {
+        // Ground with texture/gradient
+        let groundGradient = ctx.createLinearGradient(0, CANVAS_HEIGHT - GROUND_HEIGHT, 0, CANVAS_HEIGHT);
+        groundGradient.addColorStop(0, '#7CFC00'); // Light Green
+        groundGradient.addColorStop(0.7, '#008000'); // Darker Green
+        groundGradient.addColorStop(1, '#006400'); // Even darker
+        ctx.fillStyle = groundGradient;
+        ctx.fillRect(0, CANVAS_HEIGHT - GROUND_HEIGHT, CANVAS_WIDTH, GROUND_HEIGHT);
+
+        // Ground detail lines
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)'; // Darker lines for texture
+        ctx.lineWidth = 1;
+        for (let i = 0; i < CANVAS_WIDTH; i += 20) {
+            ctx.beginPath();
+            ctx.moveTo(i, CANVAS_HEIGHT - GROUND_HEIGHT);
+            ctx.lineTo(i - 10, CANVAS_HEIGHT);
+            ctx.stroke();
+        }
+    }
+
+    function drawBackground() {
+        // Sky with subtle gradient
+        let skyGradient = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT / 2);
+        skyGradient.addColorStop(0, '#87CEEB'); // Light blue
+        skyGradient.addColorStop(1, '#6B8EAD'); // Slightly darker blue
+        ctx.fillStyle = skyGradient;
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT - GROUND_HEIGHT);
+
+        // Simple clouds (white circles with slight shadow)
+        function drawCloud(x, y, scale) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+            ctx.shadowBlur = 5;
+            ctx.shadowOffsetX = 3;
+            ctx.shadowOffsetY = 3;
+
+            ctx.beginPath();
+            ctx.arc(x, y, 20 * scale, 0, Math.PI * 2);
+            ctx.arc(x + 40 * scale, y - 10 * scale, 30 * scale, 0, Math.PI * 2);
+            ctx.arc(x + 80 * scale, y + 5 * scale, 25 * scale, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.shadowBlur = 0; // Reset shadow
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+        }
+        drawCloud(100, 100, 0.8);
+        drawCloud(500, 80, 1);
+        drawCloud(250, 60, 0.6);
+        drawCloud(680, 120, 0.7);
+    }
+
+    // Collision Detection (AABB)
+    function checkCollision(p, o) {
+        return p.x < o.x + o.width &&
+               p.x + p.width > o.x &&
+               p.y < o.y + o.height &&
+               p.y + p.height > o.y;
+    }
+
+    // Game Loop
+    function gameLoop() {
+        if (!isGameRunning) {
+            cancelAnimationFrame(animationFrameId);
+            return;
+        }
+
+        // 1. Clear Canvas
+        ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT); // Clear everything for redraw
+
+        // 2. Update and Draw
+        drawBackground();
+        drawGround();
+
+        player.update();
+        player.draw();
+
+        // Obstacle generation and update
+        obstacleTimer++;
+        if (obstacleTimer >= obstacleInterval) {
+            generateObstacle();
+            obstacleTimer = 0;
+        }
+
+        // Process obstacles
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            const obs = obstacles[i];
+            obs.update();
+            obs.draw();
+
+            // Collision check
+            if (checkCollision(player, obs)) {
+                gameOver();
+                return;
+            }
+
+            // Score update
+            if (obs.x + obs.width < player.x && !obs.passed) {
+                score++;
+                obs.passed = true;
+                scoreDisplay.textContent = `SCORE: ${score}`;
+
+                // Increase game speed for difficulty
+                GAME_SPEED += GAME_SPEED_INCREASE_RATE;
+                
+            }
+
+            // Remove off-screen obstacles
+            if (obs.x + obs.width < 0) { // <-- FIX: Removed the incorrect '<if>' tag here
+                obstacles.splice(i, 1);
+            }
+        }
+
+        // 3. Request next frame
+        animationFrameId = requestAnimationFrame(gameLoop);
+    }
+
+    // Game Control Functions
+    function startGame() {
+        if (isGameRunning) return;
+        
+        // Reset game state
+        isGameRunning = true;
+        score = 0;
+        GAME_SPEED = 6;
+        obstacles = [];
+        obstacleTimer = 0;
+        player.y = player.groundY;
+        player.isJumping = false;
+        player.vy = 0;
+
+        // UI Reset
+        scoreDisplay.textContent = `SCORE: 0`;
+        messageBox.style.display = 'none';
+        startButton.style.display = 'none';
+
+        // Load high score before starting (async)
+        loadHighScore().then(() => {
+             // Start the loop after loading score
+            gameLoop();
+        });
+    }
+
+    function gameOver() {
+        isGameRunning = false;
+        cancelAnimationFrame(animationFrameId);
+        
+        finalScore.innerHTML = `Final Score: <span style="color:#FFD700;">${score}</span>`;
+        messageBox.style.display = 'block';
+
+        if (score > highScore) {
+            highScore = score;
+            highScoreDisplay.textContent = `HI: ${highScore}`;
+            finalScore.innerHTML += `<br><br>NEW HIGH SCORE!`;
+            saveHighScore(highScore);
+        }
+    }
+
+    // High Score Persistence (Firestore)
+    const HIGH_SCORE_PATH = `/artifacts/${appId}/public/data/marioRunner/highScore`;
+    const HIGH_SCORE_DOC = 'global';
+
+    async function loadHighScore() {
+        try {
+            if (db) {
+                const docRef = doc(db, HIGH_SCORE_PATH, HIGH_SCORE_DOC);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    highScore = docSnap.data().score || 0;
+                } else {
+                    highScore = 0;
+                }
+                highScoreDisplay.textContent = `HI: ${highScore}`;
+            } else {
+                // Fallback to local storage if Firestore is unavailable
+                highScore = parseInt(localStorage.getItem('marioRunnerHighScore') || '0', 10);
+                highScoreDisplay.textContent = `HI: ${highScore}`;
+            }
+        } catch (error) {
+            console.warn("Failed to load high score:", error);
+        }
+    }
+
+    async function saveHighScore(newScore) {
+        try {
+            if (db) {
+                const docRef = doc(db, HIGH_SCORE_PATH, HIGH_SCORE_DOC);
+                await setDoc(docRef, { score: newScore, userId: userId, timestamp: new Date() }, { merge: true });
+            } else {
+                 // Fallback to local storage if Firestore is unavailable
+                localStorage.setItem('marioRunnerHighScore', newScore.toString());
+            }
+        } catch (error) {
+            console.error("Failed to save high score:", error);
+        }
+    }
+
+    // Event Listeners
+    function handleJump() {
+        if (isGameRunning) {
+            player.jump();
+        } else if (messageBox.style.display === 'block') {
+            startGame();
+        }
+    }
+
+    // Keyboard controls
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+            e.preventDefault(); // Prevent page scrolling
+            handleJump();
+        }
+    });
+
+    // Button controls
+    startButton.addEventListener('click', startGame);
+    restartButton.addEventListener('click', startGame);
+
+    // Touch/Tap controls
+    canvas.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        handleJump();
+    });
+
+    // Set initial canvas dimensions for responsiveness (handled by CSS primarily, but good practice)
+    canvas.width = CANVAS_WIDTH;
+    canvas.height = CANVAS_HEIGHT;
+
+    // Initial load high score
+    loadHighScore();
+</script>
+
+</body>
+</html>

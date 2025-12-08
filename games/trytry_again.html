@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>NEON RONIN: ZERO</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Orbitron', sans-serif;
+            cursor: none; /* Custom cursor used */
+            user-select: none;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            mix-blend-mode: exclusion;
+        }
+
+        h1 {
+            color: #fff;
+            font-size: 4rem;
+            text-shadow: 0 0 20px rgba(0, 255, 255, 0.8);
+            margin: 0;
+            opacity: 0;
+            transform: scale(0.9);
+            transition: opacity 1s, transform 1s;
+        }
+
+        p {
+            color: #aaa;
+            font-size: 1.2rem;
+            letter-spacing: 2px;
+            margin-top: 10px;
+            opacity: 0;
+            transition: opacity 1s;
+        }
+
+        #score-display {
+            position: absolute;
+            top: 30px;
+            right: 40px;
+            font-size: 2rem;
+            color: #fff;
+            text-align: right;
+            font-weight: 900;
+        }
+
+        #score-label {
+            font-size: 0.8rem;
+            color: #0ff;
+            text-transform: uppercase;
+        }
+
+        #tutorial {
+            position: absolute;
+            bottom: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255,255,255,0.5);
+            font-size: 0.9rem;
+            text-align: center;
+            line-height: 1.5;
+        }
+
+        .visible {
+            opacity: 1 !important;
+            transform: scale(1) !important;
+        }
+
+        #vignette {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: radial-gradient(circle, rgba(0,0,0,0) 60%, rgba(0,0,0,0.8) 100%);
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Visual Overlays -->
+    <div id="vignette"></div>
+    
+    <div id="score-display">
+        <div id="score-label">Kills</div>
+        <div id="score-val">0</div>
+    </div>
+
+    <div id="ui-layer">
+        <h1 id="title-text">NEON RONIN</h1>
+        <p id="sub-text">Click to Initialize</p>
+    </div>
+
+    <div id="tutorial">
+        <span style="color: #0ff">MOUSE</span> to Move &bull; <span style="color: #f0f">HOLD CLICK</span> to Slow Time & Aim &bull; <span style="color: #fff">RELEASE</span> to Strike
+    </div>
+
+    <canvas id="game"></canvas>
+
+<script>
+/**
+ * ENGINE SETTINGS & UTILS
+ */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for no transparency on base
+let width, height;
+
+// Audio Context for synthesized SFX
+const AudioContext = window.AudioContext || window.webkitAudioContext;
+const audioCtx = new AudioContext();
+
+// High DPI Canvas Setup
+function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Utility Functions
+const dist = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
+const angle = (x1, y1, x2, y2) => Math.atan2(y2 - y1, x2 - x1);
+const lerp = (start, end, t) => start * (1 - t) + end * t;
+const rand = (min, max) => Math.random() * (max - min) + min;
+
+// Sound Synthesizer (Retro/Cyberpunk FX)
+function playSound(type) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    const now = audioCtx.currentTime;
+    
+    if (type === 'slash') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(800, now);
+        osc.frequency.exponentialRampToValueAtTime(100, now + 0.3);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+        osc.start(now);
+        osc.stop(now + 0.3);
+    } else if (type === 'kill') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(200, now);
+        osc.frequency.exponentialRampToValueAtTime(50, now + 0.5);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+        osc.start(now);
+        osc.stop(now + 0.5);
+    } else if (type === 'slow') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(300, now);
+        osc.frequency.linearRampToValueAtTime(100, now + 1);
+        gain.gain.setValueAtTime(0.05, now);
+        gain.gain.linearRampToValueAtTime(0, now + 1);
+        osc.start(now);
+        osc.stop(now + 1);
+    }
+}
+
+/**
+ * GAME STATE
+ */
+const state = {
+    screen: 'start', // start, game, over
+    score: 0,
+    timeScale: 1.0,
+    cameraShake: 0,
+    slowMotionFactor: 0.1,
+    combo: 0
+};
+
+// Input
+const mouse = { x: width/2, y: height/2, down: false };
+
+window.addEventListener('mousemove', e => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+});
+
+window.addEventListener('mousedown', () => {
+    if (state.screen === 'start') {
+        startGame();
+        return;
+    }
+    if (state.screen === 'over') {
+        resetGame();
+        return;
+    }
+    if (state.screen === 'game') {
+        mouse.down = true;
+        playSound('slow');
+    }
+});
+
+window.addEventListener('mouseup', () => {
+    if (state.screen === 'game' && mouse.down) {
+        mouse.down = false;
+        player.dash();
+    }
+});
+
+/**
+ * ENTITIES
+ */
+class Particle {
+    constructor(x, y, color, speed, size) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        const a = rand(0, Math.PI * 2);
+        const s = rand(speed * 0.5, speed * 1.5);
+        this.vx = Math.cos(a) * s;
+        this.vy = Math.sin(a) * s;
+        this.life = 1.0;
+        this.decay = rand(0.02, 0.05);
+        this.size = size;
+    }
+    update() {
+        this.x += this.vx * state.timeScale;
+        this.y += this.vy * state.timeScale;
+        this.life -= this.decay * state.timeScale;
+        this.vx *= 0.95; // Friction
+        this.vy *= 0.95;
+    }
+    draw(ctx) {
+        ctx.globalAlpha = this.life;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+    }
+}
+
+class Enemy {
+    constructor() {
+        // Spawn edges
+        if (Math.random() < 0.5) {
+            this.x = Math.random() < 0.5 ? -50 : width + 50;
+            this.y = Math.random() * height;
+        } else {
+            this.x = Math.random() * width;
+            this.y = Math.random() < 0.5 ? -50 : height + 50;
+        }
+        
+        this.size = 15;
+        this.color = '#ff0055'; // Magenta
+        this.speed = rand(2, 4);
+        this.angle = 0;
+        this.dead = false;
+        this.pulse = 0;
+    }
+
+    update() {
+        // Move towards player
+        const targetAngle = angle(this.x, this.y, player.x, player.y);
+        this.x += Math.cos(targetAngle) * this.speed * state.timeScale;
+        this.y += Math.sin(targetAngle) * this.speed * state.timeScale;
+        
+        // Visual Rotation
+        this.angle += 0.1 * state.timeScale;
+        this.pulse += 0.1 * state.timeScale;
+
+        // Collision with player
+        if (!player.dashing && !this.dead && dist(this.x, this.y, player.x, player.y) < this.size + player.size) {
+            endGame();
+        }
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.angle);
+        
+        // Glow
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = this.color;
+        
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        const s = this.size + Math.sin(this.pulse) * 2;
+        ctx.rect(-s/2, -s/2, s, s);
+        ctx.stroke();
+
+        // Inner Core
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.rect(-s/4, -s/4, s/2, s/2);
+        ctx.fill();
+
+        ctx.restore();
+    }
+
+    die() {
+        this.dead = true;
+        state.cameraShake = 15;
+        state.score++;
+        document.getElementById('score-val').innerText = state.score;
+        playSound('kill');
+
+        // Explosion Particles
+        for(let i=0; i<15; i++) {
+            particles.push(new Particle(this.x, this.y, this.color, 8, 3));
+        }
+        for(let i=0; i<8; i++) {
+            particles.push(new Particle(this.x, this.y, '#fff', 12, 1));
+        }
+    }
+}
+
+class Player {
+    constructor() {
+        this.x = width / 2;
+        this.y = height / 2;
+        this.size = 10;
+        this.color = '#00ffff'; // Cyan
+        this.trail = [];
+        this.dashing = false;
+        this.dashSpeed = 40;
+        this.dashTarget = {x:0, y:0};
+    }
+
+    update() {
+        // Trail Logic
+        if (state.timeScale > 0.5 || this.dashing) {
+            this.trail.push({x: this.x, y: this.y, alpha: 1.0});
+        }
+        if (this.trail.length > 20) this.trail.shift();
+
+        // Movement
+        if (this.dashing) {
+            const d = dist(this.x, this.y, this.dashTarget.x, this.dashTarget.y);
+            
+            // Check collisions during dash (Raycasting essentially)
+            enemies.forEach(e => {
+                if(dist(this.x, this.y, e.x, e.y) < 40) {
+                    if (!e.dead) e.die();
+                }
+            });
+
+            if (d < this.dashSpeed) {
+                this.x = this.dashTarget.x;
+                this.y = this.dashTarget.y;
+                this.dashing = false;
+                state.timeScale = 1.0; // Restore time
+            } else {
+                const a = angle(this.x, this.y, this.dashTarget.x, this.dashTarget.y);
+                this.x += Math.cos(a) * this.dashSpeed;
+                this.y += Math.sin(a) * this.dashSpeed;
+            }
+        } else {
+            // Normal Movement (Follow Mouse)
+            // If holding click, slow down player movement too?
+            // No, player keeps moving but time is slow.
+            
+            // Lerp towards mouse for smooth movement
+            const speed = mouse.down ? 0.02 : 0.1;
+            this.x = lerp(this.x, mouse.x, speed);
+            this.y = lerp(this.y, mouse.y, speed);
+        }
+
+        // Keep inside bounds
+        this.x = Math.max(0, Math.min(width, this.x));
+        this.y = Math.max(0, Math.min(height, this.y));
+    }
+
+    dash() {
+        this.dashing = true;
+        this.dashTarget.x = mouse.x;
+        this.dashTarget.y = mouse.y;
+        playSound('slash');
+        
+        // Shockwave visual
+        particles.push(new Particle(this.x, this.y, '#fff', 2, 50)); // Hacky large particle for flash
+    }
+
+    draw(ctx) {
+        // Draw Trail
+        ctx.save();
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = this.color;
+        
+        for (let i = 0; i < this.trail.length; i++) {
+            const point = this.trail[i];
+            point.alpha -= 0.1;
+            if(point.alpha < 0) continue;
+            
+            ctx.globalAlpha = point.alpha * 0.5;
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, this.size * (i/this.trail.length), 0, Math.PI*2);
+            ctx.fill();
+        }
+        ctx.restore();
+
+        // Draw Player
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        // Point towards mouse
+        const a = angle(this.x, this.y, mouse.x, mouse.y);
+        ctx.rotate(a);
+
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = this.color;
+        ctx.fillStyle = '#fff'; // Core
+        
+        // Triangle shape
+        ctx.beginPath();
+        ctx.moveTo(15, 0);
+        ctx.lineTo(-10, 8);
+        ctx.lineTo(-5, 0);
+        ctx.lineTo(-10, -8);
+        ctx.closePath();
+        ctx.fill();
+        
+        // Outer Glow stroke
+        ctx.strokeStyle = this.color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.restore();
+
+        // Draw Aim Line if charging
+        if (mouse.down && !this.dashing) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(this.x, this.y);
+            ctx.lineTo(mouse.x, mouse.y);
+            ctx.strokeStyle = `rgba(255, 255, 255, 0.3)`;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([10, 10]);
+            ctx.stroke();
+            
+            // Target Reticle
+            ctx.translate(mouse.x, mouse.y);
+            ctx.rotate(Date.now() / 200);
+            ctx.strokeStyle = '#0ff';
+            ctx.setLineDash([]);
+            ctx.strokeRect(-10, -10, 20, 20);
+            ctx.restore();
+        }
+    }
+}
+
+/**
+ * MAIN LOOP & MANAGERS
+ */
+let player = new Player();
+let enemies = [];
+let particles = [];
+let spawnTimer = 0;
+
+function startGame() {
+    state.screen = 'game';
+    state.score = 0;
+    enemies = [];
+    particles = [];
+    player = new Player();
+    document.getElementById('title-text').classList.remove('visible');
+    document.getElementById('sub-text').classList.remove('visible');
+    document.getElementById('score-val').innerText = '0';
+    
+    // Initial fade in
+    setTimeout(() => {
+        document.getElementById('title-text').style.display = 'none';
+    }, 1000);
+}
+
+function endGame() {
+    state.screen = 'over';
+    document.getElementById('title-text').innerText = "SYSTEM FAILURE";
+    document.getElementById('sub-text').innerText = "Click to Reboot";
+    document.getElementById('title-text').style.display = 'block';
+    
+    // Force reflow
+    void document.getElementById('title-text').offsetWidth;
+    
+    document.getElementById('title-text').classList.add('visible');
+    document.getElementById('sub-text').classList.add('visible');
+    
+    state.cameraShake = 30;
+    playSound('kill');
+}
+
+function resetGame() {
+    startGame();
+    document.getElementById('title-text').innerText = "NEON RONIN";
+}
+
+// Background Grid
+function drawGrid(ctx) {
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+    ctx.lineWidth = 1;
+    const gridSize = 50;
+    
+    // Parallax effect
+    const offsetX = (mouse.x - width/2) * 0.05;
+    const offsetY = (mouse.y - height/2) * 0.05;
+
+    for (let x = 0; x <= width; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x - offsetX, 0 - offsetY);
+        ctx.lineTo(x - offsetX, height - offsetY);
+        ctx.stroke();
+    }
+    for (let y = 0; y <= height; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0 - offsetX, y - offsetY);
+        ctx.lineTo(width - offsetX, y - offsetY);
+        ctx.stroke();
+    }
+}
+
+function gameLoop() {
+    // 1. Logic
+    if (state.screen === 'game') {
+        // Time Dilation
+        const targetTimeScale = mouse.down ? state.slowMotionFactor : 1.0;
+        state.timeScale = lerp(state.timeScale, targetTimeScale, 0.1);
+
+        // Spawning
+        spawnTimer++;
+        const spawnRate = Math.max(20, 100 - (state.score * 2)); // Gets harder
+        if (spawnTimer > spawnRate) {
+            enemies.push(new Enemy());
+            spawnTimer = 0;
+        }
+    } else {
+        state.timeScale = 1.0; // Normal speed in menu
+    }
+
+    // 2. Rendering
+    // Motion Blur Trail Effect
+    ctx.fillStyle = 'rgba(5, 5, 5, 0.3)';
+    ctx.fillRect(0, 0, width, height);
+
+    // Screen Shake Application
+    ctx.save();
+    if (state.cameraShake > 0) {
+        const dx = (Math.random() - 0.5) * state.cameraShake;
+        const dy = (Math.random() - 0.5) * state.cameraShake;
+        ctx.translate(dx, dy);
+        state.cameraShake *= 0.9;
+        if(state.cameraShake < 0.5) state.cameraShake = 0;
+    }
+
+    drawGrid(ctx);
+
+    // Custom Cursor
+    ctx.beginPath();
+    ctx.arc(mouse.x, mouse.y, 4, 0, Math.PI*2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+
+    // Update & Draw Entities
+    player.update();
+    player.draw(ctx);
+
+    for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        if (state.screen === 'game') e.update();
+        e.draw(ctx);
+        if (e.dead) enemies.splice(i, 1);
+    }
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.update();
+        p.draw(ctx);
+        if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    // Chromatic Aberration Vignette (Fake)
+    if (mouse.down) {
+        const gradient = ctx.createRadialGradient(width/2, height/2, height/3, width/2, height/2, height);
+        gradient.addColorStop(0, 'rgba(0,0,0,0)');
+        gradient.addColorStop(1, 'rgba(0, 255, 255, 0.1)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0,0,width,height);
+    }
+
+    ctx.restore();
+
+    requestAnimationFrame(gameLoop);
+}
+
+// Start
+document.getElementById('title-text').classList.add('visible');
+document.getElementById('sub-text').classList.add('visible');
+gameLoop();
+
+</script>
+</body>
+</html>

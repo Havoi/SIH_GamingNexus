@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Vinland Saga: Survivor</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #222; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            pointer-events: none;
+        }
+        h1 { margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 2px; }
+        p { margin: 5px 0; color: #aaa; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h1>Vinland Survivor</h1>
+    <p>Move: Mouse Cursor</p>
+    <p>Attack: Space Bar</p>
+    <p>Score: <span id="score">0</span></p>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Resize canvas
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Game State
+    let score = 0;
+    let gameActive = true;
+    let bloodParticles = [];
+    let snowParticles = [];
+
+    // Inputs
+    const mouse = { x: canvas.width / 2, y: canvas.height / 2 };
+    let keys = {};
+
+    window.addEventListener('mousemove', (e) => {
+        mouse.x = e.clientX;
+        mouse.y = e.clientY;
+    });
+
+    window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+            keys['Space'] = true;
+            player.attack();
+        }
+    });
+
+    window.addEventListener('keyup', (e) => {
+        if (e.code === 'Space') keys['Space'] = false;
+    });
+
+    // Player Object (Thorfinn Style - Fast, Dual Daggers)
+    const player = {
+        x: canvas.width / 2,
+        y: canvas.height / 2,
+        radius: 15,
+        speed: 4,
+        color: '#f0e68c', // Blonde hair color
+        angle: 0,
+        isAttacking: false,
+        attackTimer: 0,
+        
+        update: function() {
+            // Move towards mouse
+            const dx = mouse.x - this.x;
+            const dy = mouse.y - this.y;
+            const distance = Math.sqrt(dx*dx + dy*dy);
+            this.angle = Math.atan2(dy, dx);
+
+            if (distance > 5) {
+                this.x += (dx / distance) * this.speed;
+                this.y += (dy / distance) * this.speed;
+            }
+
+            // Attack cooldown logic
+            if (this.isAttacking) {
+                this.attackTimer--;
+                if (this.attackTimer <= 0) {
+                    this.isAttacking = false;
+                }
+            }
+        },
+
+        attack: function() {
+            if (!this.isAttacking && gameActive) {
+                this.isAttacking = true;
+                this.attackTimer = 15; // Duration of swing
+                
+                // Attack Visual (Dash forward slightly)
+                const dx = Math.cos(this.angle) * 20;
+                const dy = Math.sin(this.angle) * 20;
+                this.x += dx;
+                this.y += dy;
+
+                checkHit();
+            }
+        },
+
+        draw: function() {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.angle);
+
+            // Body
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = '#553322'; // Leather armor
+            ctx.fill();
+            
+            // Head/Hair
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius - 4, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+
+            // Daggers (drawn only if attacking or idle)
+            if (this.isAttacking) {
+                ctx.strokeStyle = '#eee';
+                ctx.lineWidth = 4;
+                
+                // Right hand swing
+                ctx.beginPath();
+                ctx.moveTo(10, 5);
+                ctx.lineTo(35, 15);
+                ctx.stroke();
+
+                // Left hand swing
+                ctx.beginPath();
+                ctx.moveTo(10, -5);
+                ctx.lineTo(35, -15);
+                ctx.stroke();
+
+                // Swing arc visual
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.beginPath();
+                ctx.arc(0, 0, 40, -Math.PI/3, Math.PI/3);
+                ctx.stroke();
+            } else {
+                // Idle daggers
+                ctx.fillStyle = '#aaa';
+                ctx.fillRect(5, 5, 15, 3);
+                ctx.fillRect(5, -8, 15, 3);
+            }
+
+            ctx.restore();
+        }
+    };
+
+    // Enemies (Generic Soldiers)
+    let enemies = [];
+    
+    function spawnEnemy() {
+        if (!gameActive) return;
+        const size = 15;
+        let x, y;
+        
+        // Spawn at edges
+        if (Math.random() < 0.5) {
+            x = Math.random() < 0.5 ? 0 - size : canvas.width + size;
+            y = Math.random() * canvas.height;
+        } else {
+            x = Math.random() * canvas.width;
+            y = Math.random() < 0.5 ? 0 - size : canvas.height + size;
+        }
+
+        enemies.push({
+            x: x,
+            y: y,
+            radius: size,
+            speed: 1 + Math.random() * 1.5, // Random speed
+            color: '#882222' // Red/Brown English soldier
+        });
+    }
+
+    setInterval(spawnEnemy, 1000); // Spawn every second
+
+    // Combat Logic
+    function checkHit() {
+        // Simple hitbox in front of player
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            const e = enemies[i];
+            const dx = e.x - player.x;
+            const dy = e.y - player.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            // If enemy is close (range 60)
+            if (dist < 60) {
+                // Check angle (must be in front of player)
+                const angleToEnemy = Math.atan2(dy, dx);
+                const angleDiff = Math.abs(angleToEnemy - player.angle);
+                
+                // Allow hit if in front (roughly)
+                if (angleDiff < 1.5 || angleDiff > 4.5) { // Pi math rough approximation
+                    killEnemy(i, e.x, e.y);
+                }
+            }
+        }
+    }
+
+    function killEnemy(index, x, y) {
+        enemies.splice(index, 1);
+        score++;
+        document.getElementById('score').innerText = score;
+        
+        // Add blood effect
+        for(let i=0; i<10; i++) {
+            bloodParticles.push({
+                x: x,
+                y: y,
+                vx: (Math.random() - 0.5) * 10,
+                vy: (Math.random() - 0.5) * 10,
+                life: 30
+            });
+        }
+    }
+
+    // Snow Effect
+    function createSnow() {
+        if(snowParticles.length < 100) {
+            snowParticles.push({
+                x: Math.random() * canvas.width,
+                y: 0,
+                speed: 1 + Math.random() * 2,
+                size: Math.random() * 3
+            });
+        }
+    }
+
+    // Game Loop
+    function update() {
+        ctx.fillStyle = 'rgba(20, 25, 30, 0.4)'; // Clear screen with slight trail
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        createSnow();
+
+        // Draw Snow
+        ctx.fillStyle = 'white';
+        snowParticles.forEach((p, i) => {
+            p.y += p.speed;
+            p.x += Math.sin(p.y * 0.01) * 0.5; // Wiggle
+            ctx.fillRect(p.x, p.y, p.size, p.size);
+            if (p.y > canvas.height) snowParticles[i].y = 0;
+        });
+
+        if (gameActive) {
+            player.update();
+            player.draw();
+
+            // Enemies
+            enemies.forEach((e, i) => {
+                // Move towards player
+                const dx = player.x - e.x;
+                const dy = player.y - e.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                e.x += (dx / dist) * e.speed;
+                e.y += (dy / dist) * e.speed;
+
+                // Draw Enemy
+                ctx.beginPath();
+                ctx.arc(e.x, e.y, e.radius, 0, Math.PI * 2);
+                ctx.fillStyle = e.color;
+                ctx.fill();
+
+                // Shield/Helmet visual
+                ctx.fillStyle = '#555';
+                ctx.fillRect(e.x - 5, e.y - 5, 10, 10);
+
+                // Collision with player (Game Over)
+                if (dist < player.radius + e.radius) {
+                    gameActive = false;
+                    alert("YOU DIED. A true warrior needs no sword... but you needed better reflexes. Refresh to restart.");
+                    location.reload();
+                }
+            });
+        }
+
+        // Particles (Blood)
+        bloodParticles.forEach((p, i) => {
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life--;
+            ctx.fillStyle = `rgba(180, 0, 0, ${p.life / 30})`;
+            ctx.fillRect(p.x, p.y, 4, 4);
+            if(p.life <= 0) bloodParticles.splice(i, 1);
+        });
+
+        requestAnimationFrame(update);
+    }
+
+    update();
+
+</script>
+</body>
+</html>

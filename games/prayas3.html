@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CHRONO-SHIFT: Gravity Protocol</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; user-select: none; }
+        #crosshair { 
+            position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; 
+            background: #fff; border-radius: 50%; transform: translate(-50%, -50%); 
+            mix-blend-mode: exclusion; pointer-events: none; z-index: 10; 
+            border: 2px solid rgba(0,0,0,0.5); 
+            transition: transform 0.1s;
+        }
+        #ui { 
+            position: absolute; bottom: 30px; left: 30px; 
+            font-family: 'Helvetica Neue', Arial, sans-serif; font-weight: 800; 
+            color: #fff; text-transform: uppercase; pointer-events: none; 
+            mix-blend-mode: difference; z-index: 5;
+        }
+        h1 { font-size: 40px; margin: 0; letter-spacing: -2px; line-height: 0.8; }
+        p { font-size: 14px; opacity: 0.7; margin-top: 10px; letter-spacing: 1px; }
+        
+        #overlay { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            background: #000; display: flex; align-items: center; justify-content: center; 
+            z-index: 100; transition: opacity 0.5s; 
+        }
+        .btn { 
+            background: #fff; color: #000; border: none; padding: 20px 50px; 
+            font-weight: bold; font-size: 18px; cursor: pointer; 
+            text-transform: uppercase; letter-spacing: 2px; 
+            transition: all 0.2s;
+        }
+        .btn:hover { background: #ff4400; color: #fff; transform: scale(1.05); }
+
+        #debug {
+            position: absolute; top: 10px; right: 10px; color: lime; font-family: monospace; font-size: 12px; pointer-events: none;
+        }
+    </style>
+    
+    <!-- Import Map -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="crosshair"></div>
+    <div id="ui">
+        <h1>CHRONO<br>SHIFT</h1>
+        <p>CLICK Surface to Reorient Gravity<br>HOLD SHIFT to Dilate Time</p>
+    </div>
+    <div id="overlay">
+        <button class="btn" id="start-btn">INITIALIZE PROTOCOL</button>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { RGBShiftShader } from 'three/addons/shaders/RGBShiftShader.js';
+        import { GammaCorrectionShader } from 'three/addons/shaders/GammaCorrectionShader.js';
+
+        // --- CONSTANTS ---
+        const CONFIG = {
+            GRAVITY: 30,
+            MOVE_SPEED: 15,
+            JUMP_FORCE: 12,
+            TIME_SCALE_NORMAL: 1.0,
+            TIME_SCALE_SLOW: 0.1,
+            WORLD_SIZE: 200,
+            BLOCK_COUNT: 150
+        };
+
+        // --- AUDIO ENGINE ---
+        class AudioEngine {
+            constructor() {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                this.masterGain = this.ctx.createGain();
+                this.masterGain.gain.value = 0.5;
+                this.masterGain.connect(this.ctx.destination);
+                
+                // Drone
+                this.droneOsc = this.ctx.createOscillator();
+                this.droneOsc.type = 'sawtooth';
+                this.droneOsc.frequency.value = 50;
+                this.droneFilter = this.ctx.createBiquadFilter();
+                this.droneFilter.type = 'lowpass';
+                this.droneFilter.frequency.value = 100;
+                
+                this.droneOsc.connect(this.droneFilter);
+                this.droneFilter.connect(this.masterGain);
+            }
+
+            start() {
+                if (this.ctx.state === 'suspended') this.ctx.resume();
+                this.droneOsc.start();
+                this.playBootSound();
+            }
+
+            playBootSound() {
+                const osc = this.ctx.createOscillator();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(100, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(800, this.ctx.currentTime + 0.3);
+                
+                const gain = this.ctx.createGain();
+                gain.gain.setValueAtTime(0.5, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.5);
+                
+                osc.connect(gain);
+                gain.connect(this.masterGain);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.5);
+            }
+
+            playShift() {
+                // Inception Horn / Bass Drop
+                const osc = this.ctx.createOscillator();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(60, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(30, this.ctx.currentTime + 0.5);
+                
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(200, this.ctx.currentTime);
+                filter.frequency.linearRampToValueAtTime(50, this.ctx.currentTime + 0.5);
+
+                const gain = this.ctx.createGain();
+                gain.gain.setValueAtTime(0.8, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 1.0);
+
+                osc.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.masterGain);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 1.0);
+            }
+
+            updateTimeScale(scale) {
+                // Pitch shift / Filter mod based on time
+                const targetFreq = 50 + (scale * 100);
+                this.droneFilter.frequency.setTargetAtTime(targetFreq, this.ctx.currentTime, 0.1);
+            }
+        }
+
+        // --- GAME ENGINE ---
+        class Game {
+            constructor() {
+                this.initGraphics();
+                this.initLevel();
+                this.initPlayer();
+                this.setupInputs();
+                
+                this.audio = new AudioEngine();
+                this.clock = new THREE.Clock();
+                this.timeScale = 1.0;
+                this.targetTimeScale = 1.0;
+                this.isPlaying = false;
+                
+                this.loop();
+            }
+
+            initGraphics() {
+                // Scene
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x050505);
+                this.scene.fog = new THREE.FogExp2(0x050505, 0.015);
+
+                // Renderer
+                this.renderer = new THREE.WebGLRenderer({ antialias: false });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                document.body.appendChild(this.renderer.domElement);
+
+                // Camera
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+                // Lighting (High Contrast)
+                const ambient = new THREE.AmbientLight(0xffffff, 0.1);
+                this.scene.add(ambient);
+
+                this.sun = new THREE.DirectionalLight(0xffffff, 1.5);
+                this.sun.position.set(50, 100, 50);
+                this.sun.castShadow = true;
+                this.sun.shadow.mapSize.width = 2048;
+                this.sun.shadow.mapSize.height = 2048;
+                this.sun.shadow.camera.near = 0.5;
+                this.sun.shadow.camera.far = 500;
+                const d = 50;
+                this.sun.shadow.camera.left = -d;
+                this.sun.shadow.camera.right = d;
+                this.sun.shadow.camera.top = d;
+                this.sun.shadow.camera.bottom = -d;
+                this.scene.add(this.sun);
+
+                // Post Processing
+                this.composer = new EffectComposer(this.renderer);
+                this.renderPass = new RenderPass(this.scene, this.camera);
+                this.composer.addPass(this.renderPass);
+
+                // Bloom
+                this.bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+                this.bloomPass.threshold = 0.1;
+                this.bloomPass.strength = 1.2;
+                this.bloomPass.radius = 0.5;
+                this.composer.addPass(this.bloomPass);
+
+                // RGB Shift (Chromatic Aberration)
+                this.rgbShiftPass = new ShaderPass(RGBShiftShader);
+                this.rgbShiftPass.uniforms['amount'].value = 0.001;
+                this.composer.addPass(this.rgbShiftPass);
+                
+                // Gamma
+                const gammaPass = new ShaderPass(GammaCorrectionShader);
+                this.composer.addPass(gammaPass);
+            }
+
+            initLevel() {
+                this.colliders = [];
+
+                const matConcrete = new THREE.MeshStandardMaterial({ 
+                    color: 0xdddddd, 
+                    roughness: 0.9, 
+                    metalness: 0.1 
+                });
+                
+                const matTarget = new THREE.MeshStandardMaterial({
+                    color: 0xff4400,
+                    emissive: 0xff4400,
+                    emissiveIntensity: 2.0,
+                    roughness: 0.2
+                });
+
+                // Starting Platform
+                const startPlat = new THREE.Mesh(new THREE.BoxGeometry(20, 2, 20), matConcrete);
+                startPlat.position.set(0, -2, 0);
+                startPlat.receiveShadow = true;
+                startPlat.castShadow = true;
+                this.scene.add(startPlat);
+                this.colliders.push(startPlat);
+
+                // Procedural Brutalist City
+                for(let i=0; i<CONFIG.BLOCK_COUNT; i++) {
+                    const w = 5 + Math.random() * 15;
+                    const h = 5 + Math.random() * 40;
+                    const d = 5 + Math.random() * 15;
+                    
+                    const geo = new THREE.BoxGeometry(w, h, d);
+                    const mesh = new THREE.Mesh(geo, matConcrete);
+                    
+                    mesh.position.set(
+                        (Math.random() - 0.5) * CONFIG.WORLD_SIZE,
+                        (Math.random() - 0.5) * CONFIG.WORLD_SIZE,
+                        (Math.random() - 0.5) * CONFIG.WORLD_SIZE
+                    );
+                    
+                    // Keep center clear
+                    if (mesh.position.length() < 30) continue;
+
+                    mesh.castShadow = true;
+                    mesh.receiveShadow = true;
+                    this.scene.add(mesh);
+                    this.colliders.push(mesh);
+                }
+
+                // The Obelisk (Goal)
+                const obelisk = new THREE.Mesh(new THREE.BoxGeometry(4, 12, 4), matTarget);
+                obelisk.position.set(0, 10, -80);
+                this.scene.add(obelisk);
+                
+                // Obelisk Light
+                const oLight = new THREE.PointLight(0xff4400, 2, 30);
+                oLight.position.copy(obelisk.position);
+                this.scene.add(oLight);
+            }
+
+            initPlayer() {
+                // Physics State
+                this.player = {
+                    pos: new THREE.Vector3(0, 5, 0),
+                    vel: new THREE.Vector3(0, 0, 0),
+                    quat: new THREE.Quaternion(), // Current Orientation
+                    targetQuat: new THREE.Quaternion(), // Target Orientation (Gravity aligned)
+                    gravityDir: new THREE.Vector3(0, -1, 0),
+                    onGround: false,
+                    jumpCooldown: 0
+                };
+
+                // Camera Rig
+                // We create a container Object3D for the player that rotates to match gravity
+                this.playerRig = new THREE.Object3D();
+                this.playerRig.position.copy(this.player.pos);
+                this.scene.add(this.playerRig);
+
+                // The Camera acts as the Head, handling Yaw/Pitch relative to the Rig
+                this.camera.position.set(0, 0, 0);
+                this.playerRig.add(this.camera);
+
+                // Interaction
+                this.raycaster = new THREE.Raycaster();
+                this.center = new THREE.Vector2(0, 0);
+            }
+
+            setupInputs() {
+                this.input = { w: false, a: false, s: false, d: false, jump: false, shift: false };
+                
+                document.addEventListener('keydown', (e) => {
+                    const k = e.key.toLowerCase();
+                    if(k === 'w') this.input.w = true;
+                    if(k === 'a') this.input.a = true;
+                    if(k === 's') this.input.s = true;
+                    if(k === 'd') this.input.d = true;
+                    if(k === ' ') this.input.jump = true;
+                    if(e.key === 'Shift') this.input.shift = true;
+                });
+
+                document.addEventListener('keyup', (e) => {
+                    const k = e.key.toLowerCase();
+                    if(k === 'w') this.input.w = false;
+                    if(k === 'a') this.input.a = false;
+                    if(k === 's') this.input.s = false;
+                    if(k === 'd') this.input.d = false;
+                    if(k === ' ') this.input.jump = false;
+                    if(e.key === 'Shift') this.input.shift = false;
+                });
+
+                document.addEventListener('mousedown', (e) => {
+                    if(!this.isPlaying) return;
+                    if(e.button === 0) this.triggerGravityShift();
+                });
+
+                // Pointer Lock
+                const startBtn = document.getElementById('start-btn');
+                startBtn.addEventListener('click', () => {
+                    document.body.requestPointerLock();
+                    this.isPlaying = true;
+                    this.audio.start();
+                    document.getElementById('overlay').style.opacity = 0;
+                    setTimeout(() => document.getElementById('overlay').style.display = 'none', 500);
+                });
+
+                document.addEventListener('mousemove', (e) => {
+                    if(document.pointerLockElement === document.body) {
+                        // Mouse Look
+                        // Yaw: Rotate Player Rig around its local Y axis
+                        // Pitch: Rotate Camera around its local X axis
+                        const sens = 0.002;
+                        
+                        // Rotate camera (Pitch) - Limit to prevent flipping
+                        this.camera.rotation.x -= e.movementY * sens;
+                        this.camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, this.camera.rotation.x));
+
+                        // Rotate Rig (Yaw)
+                        this.playerRig.rotateY(-e.movementX * sens);
+                    }
+                });
+
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                    this.composer.setSize(window.innerWidth, window.innerHeight);
+                });
+            }
+
+            triggerGravityShift() {
+                // Raycast from center
+                this.raycaster.setFromCamera(this.center, this.camera);
+                const intersects = this.raycaster.intersectObjects(this.colliders);
+
+                if(intersects.length > 0) {
+                    const hit = intersects[0];
+                    const normal = hit.face.normal.clone();
+                    
+                    // Transform normal to world space if object is rotated (Standard boxes aren't usually, but good practice)
+                    normal.transformDirection(hit.object.matrixWorld).normalize();
+
+                    // New Gravity is Opposite of Surface Normal
+                    const newGravity = normal.clone().negate();
+                    
+                    // Only switch if different
+                    if(newGravity.distanceTo(this.player.gravityDir) > 0.01) {
+                        this.player.gravityDir.copy(newGravity);
+                        this.audio.playShift();
+
+                        // Calculate Target Quaternion Alignment
+                        // We want the player's Up (Local Y) to align with the Surface Normal
+                        const targetUp = normal.clone();
+                        const currentUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.playerRig.quaternion);
+                        
+                        // Create a quaternion that rotates currentUp to targetUp
+                        const alignQuat = new THREE.Quaternion().setFromUnitVectors(currentUp, targetUp);
+                        
+                        // Apply this rotation to the player's current orientation
+                        this.player.targetQuat = alignQuat.multiply(this.playerRig.quaternion).normalize();
+                        
+                        // Add some visual flair
+                        this.rgbShiftPass.uniforms['amount'].value = 0.005;
+                    }
+                }
+            }
+
+            updatePhysics(dt) {
+                // Time Dilation
+                this.targetTimeScale = this.input.shift ? CONFIG.TIME_SCALE_SLOW : CONFIG.TIME_SCALE_NORMAL;
+                this.timeScale += (this.targetTimeScale - this.timeScale) * 10.0 * dt;
+                
+                // Scaled Delta Time
+                const sdt = dt * this.timeScale;
+
+                // 1. Reorient Player (Smooth Gravity Transition) - Independent of time scale for snappy feel
+                this.playerRig.quaternion.slerp(this.player.targetQuat, 5.0 * dt);
+
+                // 2. Input Movement
+                // Get Forward and Right vectors relative to the Camera's looking direction, but projected onto the current floor plane
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+                const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+                
+                // Transform these local-to-head vectors into world space relative to the RIG's orientation
+                forward.applyQuaternion(this.playerRig.quaternion);
+                right.applyQuaternion(this.playerRig.quaternion);
+
+                // We need to flatten these vectors onto the plane perpendicular to gravity
+                // Plane normal is -GravityDir
+                const up = this.player.gravityDir.clone().negate();
+                
+                // Project and normalize
+                forward.projectOnPlane(up).normalize();
+                right.projectOnPlane(up).normalize();
+
+                const moveDir = new THREE.Vector3();
+                if(this.input.w) moveDir.add(forward);
+                if(this.input.s) moveDir.sub(forward);
+                if(this.input.d) moveDir.add(right);
+                if(this.input.a) moveDir.sub(right);
+
+                if(moveDir.length() > 0) moveDir.normalize();
+
+                // Apply Acceleration to Velocity
+                const speed = CONFIG.MOVE_SPEED;
+                
+                // Separate Velocity into Vertical (Gravity) and Horizontal (Movement)
+                const velDotUp = this.player.vel.dot(up);
+                const velVertical = up.clone().multiplyScalar(velDotUp);
+                const velHorizontal = this.player.vel.clone().sub(velVertical);
+
+                // Move horizontal velocity towards target speed
+                const targetVel = moveDir.multiplyScalar(speed);
+                velHorizontal.lerp(targetVel, 10 * sdt);
+
+                // Apply Gravity
+                const gravityForce = this.player.gravityDir.clone().multiplyScalar(CONFIG.GRAVITY * sdt);
+                velVertical.add(gravityForce);
+
+                // Jump
+                if(this.input.jump && this.player.onGround && this.player.jumpCooldown <= 0) {
+                    const jumpVec = up.clone().multiplyScalar(CONFIG.JUMP_FORCE);
+                    velVertical.add(jumpVec);
+                    this.player.onGround = false;
+                    this.player.jumpCooldown = 0.2;
+                }
+                if(this.player.jumpCooldown > 0) this.player.jumpCooldown -= sdt;
+
+                // Combine
+                this.player.vel.copy(velHorizontal).add(velVertical);
+
+                // 3. Collision Detection (Simple Raycast Solver)
+                // We predict position and check for collisions
+                const ds = this.player.vel.clone().multiplyScalar(sdt);
+                
+                // Ground Check
+                this.player.onGround = false;
+                const rayOrigin = this.playerRig.position.clone();
+                const rayDir = this.player.gravityDir.clone().normalize();
+                
+                // Raycast down relative to player
+                this.raycaster.set(rayOrigin, rayDir);
+                // Player height is roughly 2 units. Eye is at 0,0,0 local. 
+                // Let's assume Rig Pos is at 'feet' level visually, but camera is elevated? 
+                // No, standard FPS: Pos is center or feet. Let's say Pos is center.
+                // We need to offset ray origin.
+                
+                // Actually, let's just integrate position first, then resolve overlaps.
+                // Simplest robust method for arbitrary gravity:
+                // Move, then SphereCast or Multi-Raycast against world.
+                
+                this.player.pos.add(ds);
+
+                // Naive Collision: Ground Plane check
+                // We cast a ray "Down" (Gravity direction). If distance < playerHeight, snap.
+                const pHeight = 2.0;
+                this.raycaster.set(this.player.pos, rayDir);
+                const groundHits = this.raycaster.intersectObjects(this.colliders);
+                
+                if(groundHits.length > 0) {
+                    const hit = groundHits[0];
+                    if(hit.distance < pHeight) {
+                        // Collision with ground
+                        this.player.pos.copy(hit.point).sub(rayDir.clone().multiplyScalar(pHeight));
+                        
+                        // Kill velocity into ground
+                        const vDot = this.player.vel.dot(rayDir);
+                        if(vDot > 0) {
+                            this.player.vel.sub(rayDir.clone().multiplyScalar(vDot));
+                            this.player.onGround = true;
+                        }
+                    }
+                }
+                
+                // Sync Rig to Physics Pos
+                this.playerRig.position.copy(this.player.pos);
+            }
+
+            updateEffects(dt) {
+                // RGB Shift based on Time Dilation
+                const shiftIntensity = THREE.MathUtils.lerp(0.001, 0.005, 1.0 - (this.timeScale / CONFIG.TIME_SCALE_NORMAL));
+                this.rgbShiftPass.uniforms['amount'].value = shiftIntensity;
+
+                // Crosshair Juice
+                const ch = document.getElementById('crosshair');
+                const scale = 1.0 + (1.0 - this.timeScale) * 1.5;
+                ch.style.transform = `translate(-50%, -50%) scale(${scale})`;
+            }
+
+            loop() {
+                requestAnimationFrame(() => this.loop());
+
+                const dt = Math.min(this.clock.getDelta(), 0.1);
+
+                if (this.isPlaying) {
+                    this.updatePhysics(dt);
+                    this.updateEffects(dt);
+                    this.audio.updateTimeScale(this.timeScale);
+                }
+
+                this.composer.render();
+            }
+        }
+
+        // Start
+        window.onload = () => {
+            const game = new Game();
+        };
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parabolic Duck Shooter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+        
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #1a1a2e; /* Darker Space/Night sky */
+            font-family: 'Press Start 2P', cursive;
+            color: #e94560; /* Accent color */
+        }
+        
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border: 4px solid #16213e;
+            box-shadow: 0 0 30px rgba(71, 16, 212, 0.5);
+            border-radius: 12px;
+            overflow: hidden;
+            background: #0f3460;
+            padding: 10px;
+        }
+
+        #gameCanvas {
+            background-color: #1e3d59; /* Inner canvas background */
+            cursor: crosshair;
+            border-radius: 8px;
+            box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.3);
+        }
+
+        .info-panel {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            font-size: 10px;
+            color: #ffe66d;
+        }
+
+        .message-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            border: 3px solid #e94560;
+            padding: 20px 40px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 1000;
+            display: none;
+        }
+        .message-box h2 {
+            font-size: 1.2em;
+            margin-bottom: 15px;
+        }
+        .message-box button {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 5px;
+            font-size: 0.8em;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="game-container">
+    <div class="info-panel">
+        <div id="score">Score: 0</div>
+        <div id="instructions">Aim: Mouse | Shoot: Spacebar</div>
+    </div>
+    <canvas id="gameCanvas" width="800" height="500"></canvas>
+    <div id="messageBox" class="message-box">
+        <h2>Game Over</h2>
+        <p>You hit the duck <span id="finalScore"></span> times!</p>
+        <button onclick="startGame()">Play Again</button>
+    </div>
+</div>
+
+<script>
+    // --- Canvas Setup ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreElement = document.getElementById('score');
+    const messageBox = document.getElementById('messageBox');
+    const finalScore = document.getElementById('finalScore');
+
+    // --- Game Constants ---
+    const CANNON_RADIUS = 15;
+    const DUCK_RADIUS = 15;
+    const PROJECTILE_RADIUS = 5;
+    const PROJECTILE_SPEED = 600; // Pixels per second
+    const MAX_LIVES = 3;
+
+    // --- Game State ---
+    let gameState = {
+        running: false,
+        score: 0,
+        lives: MAX_LIVES,
+        lastTime: 0,
+        duckTime: 0, // Time parameter for duck's parabolic movement
+        mousePos: { x: canvas.width / 2, y: 0 },
+        projectiles: [],
+        duck: { x: 0, y: 0, speed: 80, amplitude: 150, verticalShift: 250, pathLength: canvas.width },
+        duckHit: false, // Flag to show hit animation
+    };
+
+    // --- Authentication (Placeholder - Not required for this single-player game) ---
+    // Firestore is not needed as this is a simple single-player game without persistence.
+
+    // --- Utility Functions ---
+
+    /**
+     * Converts a base64 string to an ArrayBuffer. Required for TTS PCM data.
+     */
+    function base64ToArrayBuffer(base64) {
+        const binaryString = atob(base64);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+
+    /**
+     * Converts raw signed PCM 16-bit audio data into a playable WAV Blob.
+     */
+    function pcmToWav(pcm16, sampleRate = 24000) {
+        const numChannels = 1;
+        const bitsPerSample = 16;
+        const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+        const blockAlign = numChannels * (bitsPerSample / 8);
+
+        const dataLength = pcm16.byteLength;
+        const buffer = new ArrayBuffer(44 + dataLength);
+        const view = new DataView(buffer);
+        let offset = 0;
+
+        function writeString(s) {
+            for (let i = 0; i < s.length; i++) {
+                view.setUint8(offset++, s.charCodeAt(i));
+            }
+        }
+
+        // RIFF header
+        writeString('RIFF');
+        view.setUint32(offset, 36 + dataLength, true); offset += 4;
+        writeString('WAVE');
+
+        // FMT sub-chunk
+        writeString('fmt ');
+        view.setUint32(offset, 16, true); offset += 4; // Sub-chunk size (16 for PCM)
+        view.setUint16(offset, 1, true); offset += 2; // Audio format (1 for PCM)
+        view.setUint16(offset, numChannels, true); offset += 2;
+        view.setUint32(offset, sampleRate, true); offset += 4;
+        view.setUint32(offset, byteRate, true); offset += 4;
+        view.setUint16(offset, blockAlign, true); offset += 2;
+        view.setUint16(offset, bitsPerSample, true); offset += 2;
+
+        // DATA sub-chunk
+        writeString('data');
+        view.setUint32(offset, dataLength, true); offset += 4;
+
+        // Write PCM data
+        const pcmBytes = new Uint8Array(pcm16.buffer);
+        for (let i = 0; i < dataLength; i++) {
+            view.setUint8(offset++, pcmBytes[i]);
+        }
+
+        return new Blob([view], { type: 'audio/wav' });
+    }
+
+    /**
+     * Plays a sound using the Gemini TTS API (gemini-2.5-flash-preview-tts).
+     * @param {string} prompt The text and instructions for the voice.
+     */
+    async function playSound(prompt) {
+        const apiKey = "";
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+
+        const payload = {
+            contents: [{
+                parts: [{ text: prompt }]
+            }],
+            generationConfig: {
+                responseModalities: ["AUDIO"],
+                speechConfig: {
+                    voiceConfig: {
+                        // Use a clear, firm voice
+                        prebuiltVoiceConfig: { voiceName: "Kore" } 
+                    }
+                }
+            },
+            model: "gemini-2.5-flash-preview-tts"
+        };
+
+        try {
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+            const result = await response.json();
+            const part = result?.candidates?.[0]?.content?.parts?.[0];
+            const audioData = part?.inlineData?.data;
+            const mimeTypeFull = part?.inlineData?.mimeType;
+
+            if (audioData && mimeTypeFull && mimeTypeFull.startsWith("audio/L16")) {
+                const match = mimeTypeFull.match(/rate=(\d+)/);
+                const sampleRate = match ? parseInt(match[1], 10) : 24000;
+                
+                // Convert Base64 PCM to WAV Blob and play
+                const pcmData = base64ToArrayBuffer(audioData);
+                const pcm16 = new Int16Array(pcmData);
+                const wavBlob = pcmToWav(pcm16, sampleRate);
+                const audioUrl = URL.createObjectURL(wavBlob);
+                
+                const audio = new Audio(audioUrl);
+                audio.play().catch(e => console.error("Error playing audio:", e));
+            } else {
+                console.warn("TTS audio data or correct mime type (audio/L16) not found in response.");
+            }
+        } catch (error) {
+            console.error("Error generating or playing TTS:", error);
+        }
+    }
+
+
+    // --- Game Logic ---
+
+    function resetDuck() {
+        // Reset duck to the left side, slightly varying the height and speed for challenge
+        gameState.duck.x = -DUCK_RADIUS * 2;
+        gameState.duck.y = gameState.duck.verticalShift + 50 * (Math.random() - 0.5); // Randomize start Y
+        gameState.duckTime = 0;
+        gameState.duck.speed = 70 + Math.random() * 40; // 70 to 110
+        gameState.duck.amplitude = 120 + Math.random() * 80; // 120 to 200
+        gameState.duck.pathLength = canvas.width + DUCK_RADIUS * 4; // A bit longer than canvas width
+        gameState.duckHit = false;
+    }
+
+    function calculateDuckPosition(time) {
+        const duck = gameState.duck;
+        const W = canvas.width;
+        
+        // 1. Horizontal Movement (time-based)
+        duck.x = (time * duck.speed) % duck.pathLength;
+
+        // 2. Parabolic/Arc Trajectory (based on horizontal position)
+        // Normalize x between 0 and 1 over the visible path (0 to W)
+        const normalizedX = duck.x / W;
+        
+        // Parabola function: y = -A * 4 * (x/W) * (1 - x/W) + C
+        // This creates a smooth arc starting and ending low, peaking in the middle.
+        let yOffset = -duck.amplitude * 4 * normalizedX * (1 - normalizedX);
+        
+        // If the duck wraps around, reset the y calculation
+        if (duck.x > W) {
+            yOffset = 0; // Keep it low as it flies off-screen
+        }
+
+        duck.y = duck.verticalShift + yOffset;
+        
+        // Ensure the duck doesn't go below the cannon line (optional safety)
+        duck.y = Math.min(duck.y, canvas.height - 100); 
+    }
+
+    function shoot() {
+        if (!gameState.running || gameState.duckHit) return;
+
+        const cannonX = canvas.width / 2;
+        const cannonY = canvas.height - CANNON_RADIUS;
+
+        // Calculate direction vector to mouse position
+        const dx = gameState.mousePos.x - cannonX;
+        const dy = gameState.mousePos.y - cannonY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        // Normalize and scale by projectile speed
+        const vx = (dx / distance) * PROJECTILE_SPEED;
+        const vy = (dy / distance) * PROJECTILE_SPEED;
+
+        gameState.projectiles.push({
+            x: cannonX,
+            y: cannonY,
+            vx: vx,
+            vy: vy,
+            firedAt: performance.now() // Timestamp for time-based movement
+        });
+        
+        // Play a simple shooting sound
+        // playSound("Say a sharp, quick sound effect for a firing cannon.");
+    }
+
+    function checkCollision(obj1, r1, obj2, r2) {
+        const dx = obj1.x - obj2.x;
+        const dy = obj1.y - obj2.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        return distance < (r1 + r2);
+    }
+
+    function update(timestamp) {
+        if (!gameState.running) return;
+
+        const deltaTime = (timestamp - gameState.lastTime) / 1000; // Time in seconds
+        gameState.lastTime = timestamp;
+
+        // 1. Update Duck Position
+        gameState.duckTime += deltaTime;
+        calculateDuckPosition(gameState.duckTime);
+
+        // Check if duck flew off screen
+        if (gameState.duck.x > canvas.width + DUCK_RADIUS * 2) {
+            if (!gameState.duckHit) { // Only lose a life if it wasn't already hit this pass
+                gameState.lives--;
+                // playSound(`Say sadly: The duck escaped. You have ${gameState.lives} lives left.`);
+            }
+            if (gameState.lives <= 0) {
+                endGame();
+                return;
+            }
+            resetDuck();
+        }
+
+
+        // 2. Update Projectiles
+        gameState.projectiles = gameState.projectiles.filter(p => {
+            const timeElapsed = (timestamp - p.firedAt) / 1000;
+            p.x += p.vx * deltaTime;
+            p.y += p.vy * deltaTime;
+
+            // Remove if off screen
+            if (p.x < 0 || p.x > canvas.width || p.y < 0 || p.y > canvas.height) {
+                return false;
+            }
+
+            // 3. Check Collisions
+            if (!gameState.duckHit && checkCollision(p, PROJECTILE_RADIUS, gameState.duck, DUCK_RADIUS)) {
+                gameState.score++;
+                scoreElement.textContent = `Score: ${gameState.score}`;
+                gameState.duckHit = true;
+                // playSound("Say excitedly: Hit! Nice shot.");
+                return false; // Remove projectile immediately
+            }
+
+            return true;
+        });
+
+        // If duck was hit, reset its position after a short 'hit' animation time
+        if (gameState.duckHit) {
+             // For visual effect, let the duck stay in place for a moment
+             // before resetting it entirely.
+             if (gameState.duckTime - (gameState.duckTime - deltaTime) > 0.5) {
+                 resetDuck();
+             }
+        }
+        
+        requestAnimationFrame(update);
+    }
+
+
+    // --- Drawing Functions ---
+
+    function drawCannon() {
+        const cannonX = canvas.width / 2;
+        const cannonY = canvas.height - CANNON_RADIUS;
+        
+        // Draw the base
+        ctx.fillStyle = '#474747';
+        ctx.beginPath();
+        ctx.arc(cannonX, canvas.height, CANNON_RADIUS * 1.5, Math.PI, 2 * Math.PI);
+        ctx.fill();
+
+        // Calculate direction for the barrel (from cannon to mouse)
+        const dx = gameState.mousePos.x - cannonX;
+        const dy = gameState.mousePos.y - cannonY;
+        const angle = Math.atan2(dy, dx);
+        
+        // Barrel settings
+        const barrelLength = 35;
+        const barrelThickness = 5;
+
+        // Barrel end point
+        const endX = cannonX + Math.cos(angle) * barrelLength;
+        const endY = cannonY + Math.sin(angle) * barrelLength;
+        
+        ctx.strokeStyle = '#808080';
+        ctx.lineWidth = barrelThickness;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(cannonX, cannonY);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+
+        // Draw the cannon point (for aiming reference)
+        ctx.fillStyle = '#ff6b6b';
+        ctx.beginPath();
+        ctx.arc(cannonX, cannonY, CANNON_RADIUS, 0, 2 * Math.PI);
+        ctx.fill();
+    }
+
+    function drawDuck() {
+        const duck = gameState.duck;
+        const radius = DUCK_RADIUS;
+
+        if (gameState.duckHit) {
+            // Draw an "X" or a burst effect when hit
+            ctx.strokeStyle = '#FF0000';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(duck.x - radius, duck.y - radius);
+            ctx.lineTo(duck.x + radius, duck.y + radius);
+            ctx.moveTo(duck.x + radius, duck.y - radius);
+            ctx.lineTo(duck.x - radius, duck.y + radius);
+            ctx.stroke();
+            
+            // Do not draw the duck body immediately after hit
+            return; 
+        }
+
+        // Draw the duck (simple circle with eye/beak)
+        ctx.fillStyle = '#ffd166'; // Yellow/Orange body
+        ctx.beginPath();
+        ctx.arc(duck.x, duck.y, radius, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        // Draw beak
+        ctx.fillStyle = '#ff9f1c';
+        ctx.beginPath();
+        ctx.moveTo(duck.x + radius * 0.8, duck.y - radius * 0.2);
+        ctx.lineTo(duck.x + radius * 1.5, duck.y);
+        ctx.lineTo(duck.x + radius * 0.8, duck.y + radius * 0.2);
+        ctx.closePath();
+        ctx.fill();
+
+        // Draw eye
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(duck.x - radius * 0.3, duck.y - radius * 0.3, radius * 0.2, 0, 2 * Math.PI);
+        ctx.fill();
+    }
+
+    function drawProjectiles() {
+        ctx.fillStyle = '#ff0000'; // Red projectile
+        gameState.projectiles.forEach(p => {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, PROJECTILE_RADIUS, 0, 2 * Math.PI);
+            ctx.fill();
+        });
+    }
+
+    function drawLives() {
+        ctx.fillStyle = '#e94560'; // Heart color
+        const startX = 10;
+        const startY = 30;
+        const size = 10;
+        
+        for (let i = 0; i < gameState.lives; i++) {
+            // Simple square representing a life/heart
+            ctx.fillRect(startX + i * (size + 5), startY, size, size);
+        }
+    }
+
+    function draw() {
+        // Clear canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Fill with background
+        ctx.fillStyle = '#1e3d59';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Draw Lives
+        drawLives();
+
+        // Draw elements
+        drawProjectiles();
+        drawDuck();
+        drawCannon();
+
+        // Check if game is running before requesting next frame
+        if (gameState.running) {
+            requestAnimationFrame(draw);
+        }
+    }
+
+    // --- Control Handlers ---
+
+    function handleMouseMove(event) {
+        const rect = canvas.getBoundingClientRect();
+        gameState.mousePos.x = event.clientX - rect.left;
+        gameState.mousePos.y = event.clientY - rect.top;
+        // Clamp mouse Y position so the cannon only aims up
+        gameState.mousePos.y = Math.min(gameState.mousePos.y, canvas.height - CANNON_RADIUS * 2); 
+    }
+
+    function handleKeyDown(event) {
+        // Spacebar (keyCode 32)
+        if (event.keyCode === 32) {
+            event.preventDefault(); // Prevent scrolling
+            shoot();
+        }
+    }
+
+    // --- Game Flow ---
+
+    function startGame() {
+        // Reset state
+        gameState.score = 0;
+        gameState.lives = MAX_LIVES;
+        gameState.projectiles = [];
+        gameState.duckTime = 0;
+        gameState.running = true;
+        
+        scoreElement.textContent = `Score: ${gameState.score}`;
+        messageBox.style.display = 'none';
+
+        // Set initial mouse position (center up)
+        gameState.mousePos.x = canvas.width / 2;
+        gameState.mousePos.y = canvas.height / 3;
+
+        resetDuck();
+
+        // Start the loop
+        gameState.lastTime = performance.now();
+        requestAnimationFrame(update);
+        requestAnimationFrame(draw);
+        
+        // Optional TTS message
+        // playSound("Say cheerfully: Game started! Shoot the duck!");
+    }
+
+    function endGame() {
+        gameState.running = false;
+        finalScore.textContent = gameState.score;
+        messageBox.style.display = 'block';
+        // Optional TTS message
+        // playSound(`Say dramatically: Game over. Final score is ${gameState.score}.`);
+    }
+
+    // --- Initialization ---
+
+    canvas.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('keydown', handleKeyDown);
+
+    // Initial message to prompt the user to start
+    document.addEventListener('DOMContentLoaded', () => {
+        messageBox.style.display = 'block';
+        messageBox.querySelector('h2').textContent = "Parabolic Duck Shooter";
+        messageBox.querySelector('p').innerHTML = "Click 'Start Game' to begin. Aim with the mouse, shoot with the Spacebar.";
+        messageBox.querySelector('button').textContent = "Start Game";
+    });
+
+</script>
+</body>
+</html>

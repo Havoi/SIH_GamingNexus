@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEON BREACH: OVERDRIVE</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', Courier, monospace; }
+        
+        /* HUD UI */
+        #hud {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 30px;
+            box-sizing: border-box;
+        }
+
+        .hud-top { display: flex; justify-content: space-between; align-items: flex-start; }
+        .hud-bottom { display: flex; justify-content: center; align-items: flex-end; }
+
+        h1 { color: #fff; text-shadow: 0 0 10px #0ff; margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 4px; }
+        .score-box { text-align: right; }
+        #score-val { color: #f0f; font-size: 48px; font-weight: bold; text-shadow: 0 0 20px #f0f; }
+        .label { color: #888; font-size: 12px; display: block; }
+
+        /* EMG Visualizer */
+        #emg-container {
+            width: 300px;
+            height: 10px;
+            background: #333;
+            border: 2px solid #555;
+            border-radius: 5px;
+            overflow: hidden;
+            position: relative;
+            transform: skewX(-20deg);
+        }
+        #emg-bar {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #0ff, #fff);
+            box-shadow: 0 0 15px #0ff;
+            transition: width 0.1s;
+        }
+        .emg-label { color: #0ff; margin-bottom: 5px; font-weight: bold; text-align: center; width: 100%; }
+
+        /* Status Text */
+        #status-msg {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+            font-size: 20px;
+            text-shadow: 0 0 10px rgba(0,0,0,0.8);
+            display: none; /* Hidden by default */
+        }
+
+        /* Scanlines Overlay */
+        #scanlines {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+    </style>
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="scanlines"></div>
+
+    <div id="hud">
+        <div class="hud-top">
+            <div>
+                <h1>Neon Breach</h1>
+                <span class="label">SYSTEM STATUS: ONLINE</span>
+            </div>
+            <div class="score-box">
+                <span class="label">DATA HARVESTED</span>
+                <span id="score-val">0</span>
+            </div>
+        </div>
+
+        <div id="status-msg">
+            <h2>SYSTEM CRASHED</h2>
+            <p>Click to Reboot</p>
+        </div>
+
+        <div class="hud-bottom">
+            <div style="text-align: center;">
+                <div class="emg-label">OVERDRIVE SIGNAL (EMG)</div>
+                <div id="emg-container">
+                    <div id="emg-bar"></div>
+                </div>
+                <span class="label" style="margin-top: 5px;">HOLD SPACE / CLICK TO FLEX</span>
+            </div>
+        </div>
+    </div>
+
+<script>
+    /**
+     * NEON BREACH: OVERDRIVE
+     * * FIXED: Initialization order to resolve ReferenceError
+     */
+
+    // --- Configuration ---
+    const CONFIG = {
+        speedBase: 40,
+        speedOverdrive: 90,
+        laneWidth: 6,
+        colorRest: 0x00ffff,   // Cyan
+        colorActive: 0xffaa00, // Orange
+        colorDanger: 0xff0044  // Red
+    };
+
+    // --- Global State ---
+    let scene, camera, renderer;
+    let player;
+    let obstacles = [];
+    let particles = [];
+    let score = 0;
+    let isGameOver = false;
+    let lastTime = 0;
+    let speed = CONFIG.speedBase;
+    let terrain1, terrain2;
+
+    // Input State
+    const input = {
+        x: 0, // -1 to 1 (IMU Left/Right)
+        y: 0, // -1 to 1 (IMU Up/Down)
+        active: false // Boolean (EMG Flex)
+    };
+
+    // DOM Elements
+    const scoreEl = document.getElementById('score-val');
+    const emgBar = document.getElementById('emg-bar');
+    const statusMsg = document.getElementById('status-msg');
+
+    // --- Initialization Function ---
+    function init() {
+        // 1. Scene Setup
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050510);
+        scene.fog = new THREE.FogExp2(0x050510, 0.015);
+
+        // 2. Camera
+        camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 500);
+        camera.position.set(0, 4, 10);
+        
+        // 3. Renderer
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        document.body.appendChild(renderer.domElement);
+
+        // 4. Lighting
+        const ambLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
+
+        // 5. Build World
+        createInfiniteGrid();
+        player = new Player();
+        scene.add(player.mesh);
+
+        // 6. Events
+        window.addEventListener('resize', onResize);
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mousedown', () => setEmg(true));
+        window.addEventListener('mouseup', () => setEmg(false));
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') setEmg(true);
+            if (isGameOver) resetGame();
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') setEmg(false);
+        });
+        window.addEventListener('touchstart', () => { setEmg(true); if(isGameOver) resetGame(); });
+        window.addEventListener('touchend', () => setEmg(false));
+    }
+
+    // --- Input Simulation ---
+    function handleMouseMove(e) {
+        input.x = (e.clientX / window.innerWidth) * 2 - 1;
+        input.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    }
+
+    function setEmg(isActive) {
+        input.active = isActive;
+        emgBar.style.width = isActive ? '100%' : '10%';
+        emgBar.style.background = isActive ? 
+            'linear-gradient(90deg, #ffaa00, #fff)' : 
+            'linear-gradient(90deg, #0ff, #fff)';
+        emgBar.style.boxShadow = isActive ? '0 0 20px #ffaa00' : '0 0 10px #0ff';
+    }
+
+    // --- Game Objects ---
+
+    class Player {
+        constructor() {
+            this.mesh = new THREE.Group();
+            
+            // Core
+            const coreGeo = new THREE.ConeGeometry(0.5, 2, 4);
+            const coreMat = new THREE.MeshStandardMaterial({ 
+                color: 0x222222, 
+                emissive: CONFIG.colorRest,
+                emissiveIntensity: 0.8,
+                roughness: 0.2
+            });
+            this.core = new THREE.Mesh(coreGeo, coreMat);
+            this.core.rotation.x = Math.PI / 2;
+            this.mesh.add(this.core);
+
+            // Wings
+            this.wings = new THREE.Group();
+            const wingGeo = new THREE.BoxGeometry(0.2, 0.1, 1.5);
+            const wingMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+            
+            this.leftWing = new THREE.Mesh(wingGeo, wingMat);
+            this.leftWing.position.set(-0.6, 0, -0.5);
+            this.leftWing.rotation.y = 0.5;
+            this.wings.add(this.leftWing);
+
+            this.rightWing = new THREE.Mesh(wingGeo, wingMat);
+            this.rightWing.position.set(0.6, 0, -0.5);
+            this.rightWing.rotation.y = -0.5;
+            this.wings.add(this.rightWing);
+
+            this.mesh.add(this.wings);
+
+            this.targetX = 0;
+            this.targetY = 0;
+        }
+
+        update(dt) {
+            this.targetX = input.x * 12; 
+            this.targetY = Math.max(0.5, input.y * 6 + 3); 
+
+            this.mesh.position.x += (this.targetX - this.mesh.position.x) * 5 * dt;
+            this.mesh.position.y += (this.targetY - this.mesh.position.y) * 5 * dt;
+
+            this.mesh.rotation.z = -input.x * 0.8;
+            this.mesh.rotation.x = input.y * 0.3;
+
+            const targetEmissive = input.active ? CONFIG.colorActive : CONFIG.colorRest;
+            this.core.material.emissive.setHex(targetEmissive);
+            
+            const targetWingSpread = input.active ? 1.2 : 0;
+            this.leftWing.position.x = THREE.MathUtils.lerp(this.leftWing.position.x, -0.6 - targetWingSpread, dt * 5);
+            this.rightWing.position.x = THREE.MathUtils.lerp(this.rightWing.position.x, 0.6 + targetWingSpread, dt * 5);
+
+            spawnParticle(this.mesh.position, input.active ? 0xffaa00 : 0x00ffff);
+        }
+    }
+
+    // --- Procedural World Generation (No External Lib) ---
+
+    function generateTerrain() {
+        const terrainGeo = new THREE.PlaneGeometry(200, 200, 40, 40);
+        terrainGeo.rotateX(-Math.PI / 2);
+        
+        const posAttribute = terrainGeo.attributes.position;
+        const vertex = new THREE.Vector3();
+
+        for (let i = 0; i < posAttribute.count; i++) {
+            vertex.fromBufferAttribute(posAttribute, i);
+            
+            // Simple Canyon Math
+            // Center is low, edges are high
+            let y = Math.abs(vertex.x) < 15 ? -2 : 10;
+            
+            // Add pseudo-random noise using Math.sin/cos
+            // This replaces SimplexNoise for stability
+            y += Math.sin(vertex.x * 0.2) * Math.cos(vertex.z * 0.2) * 2;
+            y += Math.sin(vertex.x * 0.5 + vertex.z * 0.1) * 1;
+            
+            posAttribute.setY(i, y);
+        }
+        terrainGeo.computeVertexNormals();
+        
+        const terrainMat = new THREE.MeshStandardMaterial({ 
+            color: 0x111111,
+            wireframe: true,
+            emissive: 0x001133,
+            emissiveIntensity: 0.2
+        });
+
+        return { geo: terrainGeo, mat: terrainMat };
+    }
+
+    function createInfiniteGrid() {
+        const { geo, mat } = generateTerrain();
+        
+        terrain1 = new THREE.Mesh(geo, mat);
+        terrain2 = new THREE.Mesh(geo, mat);
+        terrain2.position.z = -200;
+
+        scene.add(terrain1);
+        scene.add(terrain2);
+    }
+
+    // --- Obstacle Logic ---
+
+    function spawnObstacle() {
+        const isBreakable = Math.random() > 0.6; 
+        
+        const geo = new THREE.BoxGeometry(isBreakable ? 4 : 3, isBreakable ? 4 : 10, 1);
+        const mat = new THREE.MeshPhongMaterial({ 
+            color: isBreakable ? CONFIG.colorActive : CONFIG.colorDanger,
+            emissive: isBreakable ? 0xff4400 : 0xff0000,
+            emissiveIntensity: 0.5,
+            transparent: true,
+            opacity: 0.9
+        });
+
+        const mesh = new THREE.Mesh(geo, mat);
+        
+        mesh.position.z = -100;
+        mesh.position.x = (Math.random() - 0.5) * 20; 
+        mesh.position.y = 3; 
+
+        mesh.userData = { 
+            type: isBreakable ? 'breakable' : 'wall',
+            active: true 
+        };
+
+        scene.add(mesh);
+        obstacles.push(mesh);
+    }
+
+    function updateObstacles(dt) {
+        if (Math.random() < 0.05) spawnObstacle();
+
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            const ob = obstacles[i];
+            ob.position.z += speed * dt;
+
+            // Collision
+            const distZ = Math.abs(ob.position.z - player.mesh.position.z);
+            const distX = Math.abs(ob.position.x - player.mesh.position.x);
+            const distY = Math.abs(ob.position.y - player.mesh.position.y);
+
+            if (ob.userData.active && distZ < 2 && distX < 2.5 && distY < 3) {
+                handleCollision(ob);
+            }
+
+            if (ob.position.z > 20) {
+                scene.remove(ob);
+                obstacles.splice(i, 1);
+                if (ob.userData.active) score += 10;
+            }
+        }
+    }
+
+    function handleCollision(obstacle) {
+        if (obstacle.userData.type === 'breakable') {
+            if (input.active) {
+                createExplosion(obstacle.position, CONFIG.colorActive);
+                scene.remove(obstacle);
+                obstacle.userData.active = false;
+                score += 50;
+                shakeCamera(0.5);
+            } else {
+                gameOver();
+            }
+        } else {
+            gameOver();
+        }
+    }
+
+    // --- Particles ---
+
+    function spawnParticle(pos, color) {
+        const geo = new THREE.BoxGeometry(0.1, 0.1, 0.5);
+        const mat = new THREE.MeshBasicMaterial({ color: color });
+        const mesh = new THREE.Mesh(geo, mat);
+        
+        mesh.position.copy(pos);
+        mesh.position.x += (Math.random() - 0.5) * 0.5;
+        mesh.position.y += (Math.random() - 0.5) * 0.5;
+        
+        mesh.userData = { life: 1.0 };
+        scene.add(mesh);
+        particles.push(mesh);
+    }
+
+    function createExplosion(pos, color) {
+        for(let i=0; i<15; i++) {
+            const geo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+            const mat = new THREE.MeshBasicMaterial({ color: color });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.copy(pos);
+            mesh.userData = { 
+                life: 1.0, 
+                velocity: new THREE.Vector3(
+                    (Math.random()-0.5)*10, 
+                    (Math.random()-0.5)*10, 
+                    (Math.random()-0.5)*10
+                ) 
+            };
+            scene.add(mesh);
+            particles.push(mesh);
+        }
+    }
+
+    function updateParticles(dt) {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.userData.life -= dt * 2;
+            p.position.z += speed * dt * 0.5; 
+            
+            if (p.userData.velocity) {
+                p.position.addScaledVector(p.userData.velocity, dt);
+            }
+
+            if (p.userData.life <= 0) {
+                scene.remove(p);
+                particles.splice(i, 1);
+            } else {
+                p.scale.setScalar(p.userData.life);
+                p.material.opacity = p.userData.life;
+            }
+        }
+    }
+
+    // --- Loop ---
+
+    let shakeIntensity = 0;
+    function shakeCamera(amount) {
+        shakeIntensity = amount;
+    }
+
+    function updateEnvironment(dt) {
+        // Move terrain towards camera (+Z)
+        if(terrain1 && terrain2) {
+            terrain1.position.z += speed * dt;
+            terrain2.position.z += speed * dt;
+
+            // Loop logic
+            if (terrain1.position.z > 200) terrain1.position.z = terrain2.position.z - 200;
+            if (terrain2.position.z > 200) terrain2.position.z = terrain1.position.z - 200;
+        }
+    }
+
+    function gameOver() {
+        isGameOver = true;
+        statusMsg.style.display = 'block';
+        createExplosion(player.mesh.position, 0xff0000);
+        player.mesh.visible = false;
+    }
+
+    function resetGame() {
+        isGameOver = false;
+        statusMsg.style.display = 'none';
+        score = 0;
+        player.mesh.visible = true;
+        obstacles.forEach(o => scene.remove(o));
+        obstacles = [];
+        player.mesh.position.set(0, 0, 0);
+    }
+
+    function animate(time) {
+        requestAnimationFrame(animate);
+
+        // Calculate DT with safety cap
+        if (!lastTime) lastTime = time;
+        let dt = (time - lastTime) / 1000;
+        lastTime = time;
+        if (dt > 0.1) dt = 0.1; // Cap at 100ms to prevent glitches
+
+        if (!isGameOver) {
+            const targetSpeed = input.active ? CONFIG.speedOverdrive : CONFIG.speedBase;
+            speed += (targetSpeed - speed) * dt * 2;
+
+            const targetFOV = input.active ? 90 : 70;
+            camera.fov += (targetFOV - camera.fov) * dt * 5;
+            camera.updateProjectionMatrix();
+
+            player.update(dt);
+            updateObstacles(dt);
+            updateEnvironment(dt);
+
+            camera.position.x = player.mesh.position.x * 0.3;
+            camera.position.y = Math.max(2, player.mesh.position.y + 2);
+            
+            if (shakeIntensity > 0) {
+                camera.position.x += (Math.random() - 0.5) * shakeIntensity;
+                camera.position.y += (Math.random() - 0.5) * shakeIntensity;
+                shakeIntensity -= dt;
+            }
+            
+            score += input.active ? 2 : 1;
+            scoreEl.innerText = Math.floor(score);
+        }
+
+        updateParticles(dt);
+        renderer.render(scene, camera);
+    }
+
+    function onResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // --- Start Game ---
+    init();
+    requestAnimationFrame(animate);
+
+</script>
+</body>
+</html>

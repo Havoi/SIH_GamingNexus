@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Simple POV Shooter Game (Fixed)</title>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <!-- Firebase imports (module) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import {
+      getAuth,
+      signInAnonymously,
+      signInWithCustomToken,
+      onAuthStateChanged
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import {
+      getFirestore,
+      doc,
+      getDoc,
+      setDoc,
+      onSnapshot,
+      updateDoc,
+      collection,
+      serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // Expose necessary Firebase functions to the non-module script below
+    window.fb = {
+      initializeApp,
+      getAuth,
+      signInAnonymously,
+      signInWithCustomToken,
+      onAuthStateChanged,
+      getFirestore,
+      doc,
+      getDoc,
+      setDoc,
+      onSnapshot,
+      updateDoc,
+      collection,
+      serverTimestamp
+    };
+  </script>
+
+  <style>
+    body { margin: 0; overflow: hidden; background-color: #121212; font-family: 'Inter', sans-serif; }
+    canvas { display: block; }
+    #info {
+      position: absolute;
+      top: 0;
+      width: 100%;
+      padding: 10px;
+      box-sizing: border-box;
+      color: white;
+      text-align: center;
+      font-size: 1.1em;
+      display: flex;
+      justify-content: space-around;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #blocker {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0,0,0,0.7);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      color: white;
+      text-align: center;
+      font-size: 1.5rem;
+      line-height: 2;
+      z-index: 20;
+    }
+    #instructions {
+      width: 80%;
+      max-width: 600px;
+      padding: 20px;
+      background-color: rgba(30, 30, 30, 0.9);
+      border-radius: 12px;
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.5);
+      border: 2px solid #555;
+    }
+    #instructions p { margin: 10px 0; font-size: 1rem; }
+    #instructions button {
+      background-color: #4CAF50; color: white; border: none; padding: 10px 20px;
+      font-size: 16px; margin: 20px 2px; cursor: pointer; border-radius: 8px;
+    }
+    #crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 16px;
+      height: 16px;
+      margin-top: -8px;
+      margin-left: -8px;
+      border: 2px solid red;
+      border-radius: 50%;
+      box-shadow: 0 0 5px rgba(255,0,0,0.8);
+      pointer-events: none;
+      z-index: 15;
+    }
+    @media (max-width: 600px) {
+      #instructions { width: 95%; font-size: 1.2rem; }
+      #info { font-size: 0.9em; }
+    }
+  </style>
+</head>
+<body>
+  <div id="blocker">
+    <div id="instructions">
+      <p><strong>Click to Play</strong></p>
+      <p>Use the mouse to look around (PointerLock).</p>
+      <p>Press <strong>SPACEBAR</strong> to shoot.</p>
+      <p>Destroy the red cubes!</p>
+      <button id="startButton">Start Game</button>
+      <p><small>Note: If the mouse lock fails, you may need to click the canvas after starting.</small></p>
+    </div>
+  </div>
+
+  <div id="info">
+    <span id="score">Score: 0</span>
+    <span id="highScore">High Score: Loading...</span>
+    <span id="userIdDisplay">User ID: Loading...</span>
+  </div>
+
+  <div id="crosshair"></div>
+
+  <script>
+    // --------- GLOBALS ----------
+    let camera, scene, renderer;
+    let controls; // minimal pointer-lock controls container
+    let raycaster;
+    let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+    let canJump = false;
+    let velocity = new THREE.Vector3();
+    let direction = new THREE.Vector3();
+    let targets = [];
+    let score = 0;
+    let highScore = 0;
+
+    const TARGET_COUNT = 10;
+    const TARGET_SIZE = 1;
+    const GRAVITY = 9.8 * 100;
+
+    // Firebase placeholders (these can be set via server-injected globals if you use them)
+    let db = null, auth = null;
+    let userId = 'anonymous';
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const firebaseConfig = typeof _firebase_config !== 'undefined' ? JSON.parse(_firebase_config) : null;
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+    const HIGH_SCORE_DOC_PATH = `artifacts/${appId}/public/data/shooting_game_scores/high_score_doc`;
+
+    // --------- FIREBASE INIT ----------
+    async function initFirebase() {
+      if (!firebaseConfig) {
+        console.warn('Firebase config missing — skipping Firebase initialization.');
+        document.getElementById('highScore').textContent = 'High Score: Unavailable (Config Missing)';
+        return;
+      }
+
+      try {
+        const app = window.fb.initializeApp(firebaseConfig);
+        auth = window.fb.getAuth(app);
+        db = window.fb.getFirestore(app);
+
+        if (initialAuthToken) {
+          await window.fb.signInWithCustomToken(auth, initialAuthToken);
+        } else {
+          await window.fb.signInAnonymously(auth);
+        }
+
+        window.fb.onAuthStateChanged(auth, (user) => {
+          if (user) {
+            userId = user.uid;
+            document.getElementById('userIdDisplay').textContent = `User ID: ${userId.substring(0, 8)}...`;
+            setupHighScoreListener();
+          } else {
+            userId = 'anonymous';
+            document.getElementById('userIdDisplay').textContent = 'User ID: Anonymous';
+          }
+        });
+      } catch (e) {
+        console.error('Firebase init/auth error:', e);
+        document.getElementById('highScore').textContent = 'High Score: Error';
+      }
+    }
+
+    function setupHighScoreListener() {
+      if (!db) return;
+      const docRef = window.fb.doc(db, HIGH_SCORE_DOC_PATH);
+
+      window.fb.onSnapshot(docRef, (docSnap) => {
+        if (docSnap.exists && docSnap.exists()) {
+          const data = docSnap.data();
+          highScore = data.score || 0;
+          const owner = data.userId ? data.userId.substring(0,5) : '?';
+          document.getElementById('highScore').textContent = `High Score: ${highScore} (${owner})`;
+        } else {
+          highScore = 0;
+          document.getElementById('highScore').textContent = 'High Score: 0';
+        }
+      }, (err) => {
+        console.error('High score listener error:', err);
+        document.getElementById('highScore').textContent = 'High Score: Error';
+      });
+    }
+
+    async function updateHighScore() {
+      if (!db || score <= highScore) return;
+      const docRef = window.fb.doc(db, HIGH_SCORE_DOC_PATH);
+      const newScoreData = {
+        score: score,
+        userId: userId,
+        timestamp: window.fb.serverTimestamp()
+      };
+      try {
+        await window.fb.setDoc(docRef, newScoreData, { merge: true });
+        highScore = score;
+        console.log('High score updated.');
+      } catch (e) {
+        console.error('Error writing high score:', e);
+      }
+    }
+
+    // --------- CONTROLS (minimal PointerLock-like) ----------
+    function initControls() {
+      const blocker = document.getElementById('blocker');
+      const startButton = document.getElementById('startButton');
+
+      // camera is already created in init(); create pitch/yaw objects and add to scene
+      const PI_2 = Math.PI / 2;
+      const EULER_Y_LIMIT = 0.5;
+
+      const pitchObject = new THREE.Object3D();
+      pitchObject.add(camera);
+
+      const yawObject = new THREE.Object3D();
+      yawObject.position.y = 10; // player height
+      yawObject.add(pitchObject);
+      scene.add(yawObject);
+
+      controls = {
+        getObject: () => yawObject,
+        enabled: false,
+        isLocked: false
+      };
+
+      function onMouseMove(event) {
+        if (!controls.isLocked) return;
+        const movementX = event.movementX || 0;
+        const movementY = event.movementY || 0;
+        yawObject.rotation.y -= movementX * 0.002;
+        pitchObject.rotation.x -= movementY * 0.002;
+        pitchObject.rotation.x = Math.max(-PI_2 + EULER_Y_LIMIT, Math.min(PI_2 - EULER_Y_LIMIT, pitchObject.rotation.x));
+      }
+
+      function onPointerlockChange() {
+        if (document.pointerLockElement === renderer.domElement) {
+          controls.isLocked = true;
+          controls.enabled = true;
+          blocker.style.display = 'none';
+        } else {
+          controls.isLocked = false;
+          controls.enabled = false;
+          blocker.style.display = 'flex';
+        }
+      }
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('pointerlockchange', onPointerlockChange);
+
+      startButton.addEventListener('click', () => {
+        if (renderer && renderer.domElement) {
+          renderer.domElement.requestPointerLock();
+        }
+      });
+
+      // clicking canvas can re-lock
+      renderer.domElement.addEventListener('click', () => {
+        if (!controls.isLocked) {
+          renderer.domElement.requestPointerLock();
+        }
+      });
+    }
+
+    // --------- INIT SCENE ----------
+    function init() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x444444);
+      scene.fog = new THREE.Fog(0x444444, 0.1, 500);
+
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const light = new THREE.HemisphereLight(0xeeeeff, 0x777788, 0.75);
+      light.position.set(0.5, 1, 0.75);
+      scene.add(light);
+
+      // controls (after camera & renderer created)
+      initControls();
+
+      raycaster = new THREE.Raycaster();
+
+      // Ground
+      const floorGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100);
+      floorGeometry.rotateX(-Math.PI / 2);
+      const floorMaterial = new THREE.MeshBasicMaterial({ color: 0x333333, side: THREE.DoubleSide });
+      const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+      scene.add(floor);
+
+      // create targets
+      createTargets();
+
+      // event listeners
+      document.addEventListener('keydown', onKeyDown);
+      document.addEventListener('keyup', onKeyUp);
+      window.addEventListener('resize', onWindowResize);
+
+      // position camera / player a bit back
+      controls.getObject().position.set(0, 10, 40);
+    }
+
+    function createTargets() {
+      const targetGeometry = new THREE.BoxGeometry(TARGET_SIZE, TARGET_SIZE, TARGET_SIZE);
+      const targetMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+
+      for (let i = 0; i < TARGET_COUNT; i++) {
+        const target = new THREE.Mesh(targetGeometry.clone(), targetMaterial.clone());
+        const x = Math.random() * 80 - 40;
+        const z = Math.random() * 80 - 40;
+        const y = Math.random() * 10 + 2;
+        target.position.set(x, y, z);
+        target.userData.health = 1;
+        scene.add(target);
+        targets.push(target);
+      }
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // --------- INPUT ----------
+    function onKeyDown(event) {
+      switch (event.code) {
+        case 'ArrowUp':
+        case 'KeyW':
+          moveForward = true; break;
+        case 'ArrowLeft':
+        case 'KeyA':
+          moveLeft = true; break;
+        case 'ArrowDown':
+        case 'KeyS':
+          moveBackward = true; break;
+        case 'ArrowRight':
+        case 'KeyD':
+          moveRight = true; break;
+        case 'Space':
+          event.preventDefault();
+          if (canJump === true) velocity.y += 150;
+          canJump = false;
+          if (controls && controls.isLocked) shoot();
+          break;
+      }
+    }
+
+    function onKeyUp(event) {
+      switch (event.code) {
+        case 'ArrowUp':
+        case 'KeyW':
+          moveForward = false; break;
+        case 'ArrowLeft':
+        case 'KeyA':
+          moveLeft = false; break;
+        case 'ArrowDown':
+        case 'KeyS':
+          moveBackward = false; break;
+        case 'ArrowRight':
+        case 'KeyD':
+          moveRight = false; break;
+      }
+    }
+
+    // --------- SHOOTING ----------
+    function shoot() {
+      // Use raycaster from camera center
+      raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+      const intersects = raycaster.intersectObjects(targets, false);
+
+      if (intersects.length > 0) {
+        const hitTarget = intersects[0].object;
+        if (targets.includes(hitTarget) && hitTarget.userData && hitTarget.userData.health > 0) {
+          hitTarget.userData.health--;
+          score += 10;
+          document.getElementById('score').textContent = `Score: ${score}`;
+
+          // Visual feedback & removal
+          hitTarget.material.color.setHex(0x00ff00);
+
+          // Remove from scene after a very brief delay (so user sees color change)
+          setTimeout(() => {
+            if (hitTarget.parent) hitTarget.parent.remove(hitTarget);
+            // dispose geometry & material
+            if (hitTarget.geometry) hitTarget.geometry.dispose();
+            if (hitTarget.material) hitTarget.material.dispose();
+            targets = targets.filter(t => t !== hitTarget);
+
+            if (targets.length === 0) {
+              endGame();
+            }
+          }, 80);
+        }
+      }
+    }
+
+    function endGame() {
+      // update high score on Firestore if possible
+      updateHighScore();
+
+      // exit pointer lock if active
+      if (document.pointerLockElement === renderer.domElement) {
+        document.exitPointerLock();
+      }
+
+      const instructions = document.getElementById('instructions');
+      instructions.innerHTML = `
+        <p><strong>Game Complete!</strong></p>
+        <p>Final Score: ${score}</p>
+        <p>${score > highScore ? 'NEW HIGH SCORE!' : 'Try again to beat the high score!'}</p>
+        <button id="playAgain">Play Again</button>
+      `;
+      document.getElementById('blocker').style.display = 'flex';
+      document.getElementById('playAgain').addEventListener('click', () => location.reload());
+    }
+
+    // --------- ANIMATION LOOP ----------
+    let prevTime = performance.now();
+    const clock = new THREE.Clock();
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const time = performance.now();
+      const delta = (time - prevTime) / 1000;
+
+      if (controls && controls.enabled) {
+        velocity.x -= velocity.x * 10.0 * delta;
+        velocity.z -= velocity.z * 10.0 * delta;
+        velocity.y -= GRAVITY * delta;
+
+        direction.z = Number(moveForward) - Number(moveBackward);
+        direction.x = Number(moveRight) - Number(moveLeft);
+        direction.normalize();
+
+        if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
+        if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
+
+        controls.getObject().translateX(velocity.x * delta);
+        controls.getObject().translateY(velocity.y * delta);
+        controls.getObject().translateZ(velocity.z * delta);
+
+        // ground collision
+        if (controls.getObject().position.y < 10) {
+          velocity.y = 0;
+          controls.getObject().position.y = 10;
+          canJump = true;
+        }
+      }
+
+      // rotate targets a bit
+      const targetsDelta = clock.getDelta();
+      targets.forEach(t => {
+        t.rotation.x += targetsDelta * 0.5;
+        t.rotation.y += targetsDelta * 0.5;
+      });
+
+      renderer.render(scene, camera);
+      prevTime = time;
+    }
+
+    // --------- STARTUP ----------
+    window.onload = function() {
+      initFirebase().then(() => {
+        init();
+        animate();
+      }).catch((e) => {
+        // If Firebase init failed unexpectedly, still start the game
+        console.warn('Firebase promise failed, but starting game anyway:', e);
+        init();
+        animate();
+      });
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neuro Nexus | EMG & IMU Interface</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/feather-icons/4.29.0/feather.min.js"></script>
+    <style>
+        /* --- DESIGN SYSTEM & VARIABLES --- */
+        :root {
+            /* Light Mode (Base) */
+            --bg-body: #f4f6f8;
+            --bg-card: #ffffff;
+            --bg-card-alt: #eef2f6;
+            --text-main: #1a202c;
+            --text-muted: #718096;
+            --text-inverse: #ffffff; /* Text that stays white on dark backgrounds */
+            --accent-primary: #635bff;
+            --accent-glow: rgba(99, 91, 255, 0.3);
+            --accent-success: #059669;
+            --nav-bg: rgba(255, 255, 255, 0.9);
+            --border-color: rgba(0, 0, 0, 0.1);
+            --shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            --gradient-1: #635bff;
+            --gradient-2: #00bcd4;
+            --gradient-3: #ff4081;
+            --overlay-color: rgba(255,255,255,0.8);
+        }
+
+        /* Dark Mode Overrides */
+        body.dark-mode {
+            --bg-body: #0a0e17;
+            --bg-card: #151a25;
+            --bg-card-alt: #1c2333;
+            --text-main: #ffffff;
+            --text-muted: #aab7c4;
+            --text-inverse: #ffffff;
+            --accent-primary: #7e76ff;
+            --accent-glow: rgba(126, 118, 255, 0.6);
+            --accent-success: #00e676;
+            --nav-bg: rgba(10, 14, 23, 0.9);
+            --border-color: rgba(255, 255, 255, 0.1);
+            --shadow: 0 15px 35px rgba(0, 0, 0, 0.5), 0 5px 15px rgba(0, 0, 0, 0.3);
+            --gradient-1: #4f46e5;
+            --gradient-2: #0ea5e9;
+            --gradient-3: #ec4899;
+            --overlay-color: rgba(10, 14, 23, 0.8);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            overflow-x: hidden;
+            line-height: 1.7;
+        }
+
+        /* --- BACKGROUND ANIMATION --- */
+        .aurora-bg {
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1;
+            background: 
+                radial-gradient(circle at 15% 50%, var(--gradient-1), transparent 25%),
+                radial-gradient(circle at 85% 30%, var(--gradient-2), transparent 25%),
+                radial-gradient(circle at 50% 80%, var(--gradient-3), transparent 25%);
+            filter: blur(80px); opacity: 0.15;
+            animation: moveGradient 20s ease infinite alternate;
+        }
+        body.dark-mode .aurora-bg { opacity: 0.25; }
+
+        @keyframes moveGradient { 0% { transform: scale(1); } 100% { transform: scale(1.1); } }
+
+        /* --- NAVIGATION --- */
+        nav {
+            position: fixed; top: 0; width: 100%; padding: 15px 40px;
+            display: flex; justify-content: space-between; align-items: center;
+            z-index: 1000; backdrop-filter: blur(12px); background: var(--nav-bg);
+            border-bottom: 1px solid var(--border-color);
+        }
+        .logo {
+            font-weight: 800; font-size: 1.4rem;
+            background: linear-gradient(135deg, var(--gradient-1), var(--gradient-2));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            display: flex; align-items: center; gap: 10px; cursor: pointer;
+        }
+        .nav-actions { display: flex; align-items: center; gap: 15px; }
+        .nav-btn {
+            background: transparent; border: none; color: var(--text-main);
+            font-weight: 600; cursor: pointer; padding: 8px 16px; border-radius: 20px;
+        }
+        .nav-btn:hover, .nav-btn.active {
+            background: var(--accent-primary); color: white; box-shadow: 0 4px 12px var(--accent-glow);
+        }
+        .theme-toggle {
+            background: transparent; border: 1px solid var(--border-color);
+            color: var(--text-main); padding: 8px; border-radius: 50%;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+        }
+        .theme-toggle:hover { background: var(--bg-card-alt); }
+
+        /* --- LAYOUT UTILS --- */
+        .container { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+        section { padding: 100px 0; border-bottom: 1px solid var(--border-color); }
+        .section-alt { background: var(--bg-card-alt); }
+        
+        .page-view { display: none; padding-top: 80px; min-height: 100vh; animation: fadeIn 0.6s ease; }
+        .page-view.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+
+        .section-header { text-align: center; margin-bottom: 60px; max-width: 800px; margin-inline: auto; }
+        .section-header h2 { font-size: 2.5rem; margin-bottom: 15px; }
+        .text-highlight { color: var(--accent-primary); }
+
+        /* --- COMPONENTS --- */
+        .cta-primary {
+            display: inline-flex; align-items: center; gap: 10px;
+            background: var(--text-main); color: var(--bg-body);
+            padding: 14px 32px; border-radius: 30px; font-weight: 700;
+            text-decoration: none; cursor: pointer; margin-top: 20px;
+        }
+        .cta-primary:hover { transform: translateY(-3px); box-shadow: 0 10px 20px rgba(0,0,0,0.2); }
+
+        .glass-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 20px; padding: 30px; box-shadow: var(--shadow);
+        }
+        body.dark-mode .glass-card {
+            background: rgba(21, 26, 37, 0.7);
+            backdrop-filter: blur(10px);
+        }
+
+        /* --- HERO SECTION --- */
+        .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; padding: 120px 0 60px; }
+        .hero-text h1 { font-size: 4rem; line-height: 1.1; margin-bottom: 25px; letter-spacing: -1px; }
+        .hero-text p { font-size: 1.25rem; color: var(--text-muted); margin-bottom: 35px; max-width: 90%; }
+        .hardware-badge {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 6px 12px; background: rgba(126, 118, 255, 0.1);
+            border: 1px solid var(--accent-primary); color: var(--accent-primary);
+            border-radius: 6px; font-size: 0.8rem; margin-top: 25px; font-family: monospace;
+        }
+
+        .hero-visual { position: relative; height: 500px; }
+        
+        /* New Image Card Styles */
+        .image-card {
+            padding: 0; overflow: hidden; position: relative;
+        }
+        .image-card img {
+            width: 100%; height: 100%; object-fit: cover;
+            transition: transform 0.5s ease;
+        }
+        .image-card:hover img { transform: scale(1.05); }
+        .image-caption {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            padding: 20px;
+            background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+            display: flex; align-items: center; gap: 10px; font-weight: 700;
+            color: white; /* Always white caption for contrast against image */
+        }
+
+        .hero-visual .main-img {
+            width: 90%; height: 400px; z-index: 2;
+        }
+        .hero-visual .floating-img {
+            position: absolute; bottom: 0px; right: 0px;
+            width: 55%; height: 250px; z-index: 3;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+            animation: float 6s ease-in-out infinite;
+        }
+        @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-20px); } }
+
+        /* --- IMPACT STATS BANNER --- */
+        .stats-banner {
+            display: grid; grid-template-columns: repeat(4, 1fr);
+            gap: 30px; padding: 60px 0;
+        }
+        .stat-block { text-align: center; padding: 20px; }
+        .stat-number { font-size: 3.5rem; font-weight: 800; color: transparent; background: linear-gradient(to right, var(--gradient-2), var(--accent-success)); -webkit-background-clip: text; display: block; line-height: 1;}
+        .stat-label { color: var(--text-muted); font-size: 1rem; margin-top: 10px; font-weight: 600;}
+
+        /* --- COMPETITION TABLE --- */
+        .comparison-table-container { overflow-x: auto; }
+        .glass-table {
+            width: 100%; border-collapse: separate; border-spacing: 0;
+            border: 1px solid var(--border-color); border-radius: 20px; overflow: hidden;
+        }
+        .glass-table th, .glass-table td {
+            padding: 20px; text-align: left; border-bottom: 1px solid var(--border-color);
+        }
+        .glass-table th { background: rgba(126, 118, 255, 0.05); font-size: 1.1rem; color: var(--text-main); }
+        .glass-table th:first-child { width: 30%; }
+        .glass-table td { vertical-align: middle; color: var(--text-muted); }
+        .glass-table .highlight-row { background: rgba(126, 118, 255, 0.1); }
+        .glass-table .highlight-row td { color: var(--text-main); font-weight: 600; }
+        .check-icon { color: var(--accent-success); }
+        .x-icon { color: var(--gradient-3); }
+
+        /* --- FEASIBILITY & SCALABILITY GRIDS --- */
+        .two-col-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; }
+        .grid-text h3 { font-size: 2rem; margin-bottom: 20px; }
+        .grid-visual { height: 400px; border-radius: 20px; overflow: hidden; }
+        .grid-visual img { width: 100%; height: 100%; object-fit: cover; }
+
+        /* --- FEATURES GRID --- */
+        .features-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; }
+        .feature-card {
+            padding: 40px 30px; border-radius: 16px; border: 1px solid var(--border-color);
+            background: var(--bg-card);
+        }
+        .feature-card:hover { border-color: var(--accent-primary); transform: translateY(-10px); box-shadow: var(--shadow); }
+        .feature-icon {
+            width: 60px; height: 60px; background: rgba(126, 118, 255, 0.15);
+            border-radius: 12px; display: flex; align-items: center; justify-content: center;
+            color: var(--accent-primary); margin-bottom: 25px;
+        }
+
+        /* --- PROTOTYPE PAGE --- */
+        .games-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(500px, 1fr)); gap: 40px; padding-bottom: 100px; }
+        .game-display { background: var(--bg-card); border-radius: 20px; overflow: hidden; border: 1px solid var(--border-color); }
+        .game-frame-wrapper { height: 400px; background: #000; display: flex; align-items: center; justify-content: center; flex-direction: column; color: white;}
+
+        /* Responsive */
+        @media (max-width: 968px) {
+            .hero { grid-template-columns: 1fr; text-align: center; padding-top: 100px; }
+            .hero-visual { height: 400px; margin-top: 40px; }
+            .hero-text h1 { font-size: 3rem; }
+            .stats-banner { grid-template-columns: 1fr 1fr; }
+            .two-col-grid { grid-template-columns: 1fr; }
+            .features-grid { grid-template-columns: 1fr; }
+            .hero-visual .floating-img { display: none; } /* Hide floating image on smaller screens */
+            .hero-visual .main-img { width: 100%; }
+        }
+        
+        /* Fallback for broken images */
+        .img-placeholder {
+            width: 100%; height: 100%;
+            background: linear-gradient(135deg, var(--bg-card), var(--bg-card-alt));
+            display: flex; align-items: center; justify-content: center;
+            color: var(--text-muted); font-weight: bold;
+        }
+    </style>
+</head>
+<body class="dark-mode"> <div class="aurora-bg"></div>
+
+    <nav>
+        <div class="logo" onclick="switchPage('home')">
+            <i data-feather="cpu"></i> NeuroNexus
+        </div>
+        <div class="nav-actions">
+            <button class="nav-btn active" id="btn-home" onclick="switchPage('home')">The Pitch</button>
+            <button class="nav-btn" id="btn-games" onclick="switchPage('games')">Prototype</button>
+            <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle Dark Mode">
+                <i data-feather="sun"></i>
+            </button>
+        </div>
+    </nav>
+
+    <main id="view-home" class="page-view active">
+        
+        <div class="container">
+            <section class="hero">
+                <div class="hero-text">
+                    <h1>Gaming Control Regained via <span class="text-highlight">Muscle Signals.</span></h1>
+                    <p>We bypass physical limitations by tapping directly into residual muscle activity. A low-cost EMG interface enabling hand amputees to play again, and a foundational step towards controller-free VR.</p>
+                    <div class="cta-primary" onclick="switchPage('games')">
+                        See the Prototype <i data-feather="arrow-right"></i>
+                    </div>
+                    <br>
+                    <div class="hardware-badge">
+                        <i data-feather="box"></i> ESP32 Microcontroller • MyoWare EMG Sensors • MPU-6050 IMU
+                    </div>
+                </div>
+                <div class="hero-visual">
+                    <div class="glass-card image-card main-img">
+                         <img src="https://images.unsplash.com/photo-1589254065878-42c9daf9714e?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80" 
+                             alt="Bionic arm technology" 
+                             onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\'img-placeholder\'>Bionic Tech Visual</div>';">
+                        <div class="image-caption">
+                            <i data-feather="activity" style="color: var(--accent-success)"></i>
+                            EMG Signal Interpretation Active
+                        </div>
+                    </div>
+                    <div class="glass-card image-card floating-img">
+                        <img src="https://images.unsplash.com/photo-1550751827-4bd374c3f58b?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80" 
+                             alt="Cyberpunk Circuitry"
+                             onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\'img-placeholder\'>Sensor Tech</div>';">
+                         <div class="image-caption" style="padding: 15px;">
+                            <i data-feather="zap" size="16"></i>
+                            Myo-Electric Sensors
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <section class="section-alt">
+            <div class="container">
+                <div class="section-header">
+                    <h2>The Impact Scale</h2>
+                    <p>Addressing a massive, underserved market with accessible technology.</p>
+                </div>
+                <div class="stats-banner glass-card">
+                    <div class="stat-block">
+                        <span class="stat-number">40M+</span>
+                        <span class="stat-label">Amputees Globally</span>
+                    </div>
+                    <div class="stat-block">
+                        <span class="stat-number">$20</span>
+                        <span class="stat-label">Our BOM Cost</span>
+                    </div>
+                    <div class="stat-block">
+                        <span class="stat-number"><20ms</span>
+                        <span class="stat-label">Input Latency</span>
+                    </div>
+                     <div class="stat-block">
+                        <span class="stat-number">95%</span>
+                        <span class="stat-label">Cheaper than Med-Tech</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <div class="container">
+                 <div class="two-col-grid">
+                    <div class="grid-text">
+                        <h3>Feasibility: Hacking the "Phantom Limb"</h3>
+                        <p>How do you control a game without a hand? 80%+ of amputees experience "phantom limb" sensations. The nerves and muscles in the residual limb still fire when they *try* to move their missing fingers.</p>
+                        <p>Our feasibility rests on this biological fact. We don't need the hand; we only need the <strong>intention</strong> signal at the forearm stump. Our DSP algorithm filters noise and translates that intention into a digital keypress.</p>
+                        <br>
+                        <ul>
+                           <li style="margin-bottom: 10px; display: flex; gap: 10px;"><i data-feather="check-circle" style="color: var(--accent-success)"></i> Proven biological signal path.</li>
+                           <li style="display: flex; gap: 10px;"><i data-feather="check-circle" style="color: var(--accent-success)"></i> Works with standard, off-the-shelf sensors.</li>
+                        </ul>
+                    </div>
+                    <div class="grid-visual glass-card image-card">
+                        <img src="https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80" 
+                             alt="Human arm anatomy research"
+                             onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\'img-placeholder\'>Anatomy / Feasibility Visual</div>';">
+                        <div class="image-caption">Residual Muscle Activity Detection</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section-alt">
+            <div class="container">
+                <div class="section-header">
+                    <h2>The Competitive Landscape</h2>
+                    <p>We fill the massive gap between unaffordable medical devices and unusable standard controllers.</p>
+                </div>
+                <div class="comparison-table-container">
+                    <table class="glass-table">
+                        <thead>
+                            <tr>
+                                <th>Solution Type</th>
+                                <th>Cost</th>
+                                <th>Gaming Readiness</th>
+                                <th>Setup Time</th>
+                                <th>Accessibility Focus</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr class="highlight-row">
+                                <td><strong>NeuroNexus (Our Solution)</strong></td>
+                                <td><strong><$50 (DIY)</strong></td>
+                                <td><strong><i data-feather="check" class="check-icon"></i> High (Low Latency)</strong></td>
+                                <td><strong>Fast (Calibration UI)</strong></td>
+                                <td><strong>Primary</strong></td>
+                            </tr>
+                            <tr>
+                                <td>Advanced Medical Myoelectric Arms</td>
+                                <td>$10,000 - $50k+</td>
+                                <td><i data-feather="x" class="x-icon"></i> Low (Slow grip speed)</td>
+                                <td>Requires Specialist</td>
+                                <td>Secondary to daily tasks</td>
+                            </tr>
+                            <tr>
+                                <td>Standard Xbox/PS5 Controller</td>
+                                <td>$60</td>
+                                <td><i data-feather="check" class="check-icon"></i> High</td>
+                                <td>Instant</td>
+                                <td><i data-feather="x" class="x-icon"></i> None (Requires 2 hands)</td>
+                            </tr>
+                             <tr>
+                                <td>Adaptive Controller (Microsoft)</td>
+                                <td>$100 + Peripherals</td>
+                                <td><i data-feather="check" class="check-icon"></i> High</td>
+                                <td>High (Configuring switches)</td>
+                                <td>Primary (But expensive)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <div class="container">
+                 <div class="two-col-grid">
+                    <div class="grid-visual glass-card image-card" style="order: 2;">
+                        <img src="https://images.unsplash.com/photo-1622979135225-d2ba269fb1bd?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80" 
+                             alt="VR Headset user"
+                             onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\'img-placeholder\'>Scalability / VR Visual</div>';">
+                         <div class="image-caption">Future Application: XR Interaction</div>
+                    </div>
+                    <div class="grid-text" style="order: 1;">
+                        <h3>Scalability: Beyond Accessibility to XR</h3>
+                        <p>While our primary mission is accessibility, the technology scales rapidly into the broader gaming market.</p>
+                        <p>By combining EMG (finger intent) with our onboard <strong>IMU (Inertial Measurement Unit)</strong> for 6-axis spatial tracking, we are building the foundation for the next generation of VR/AR interaction.</p>
+                        <p class="text-highlight"><strong>No bulky controllers held in the hand. Just natural movement and intention.</strong></p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section-alt">
+             <div class="container">
+                <div class="section-header">
+                    <h2>Core Technology Stack</h2>
+                </div>
+                 <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon"><i data-feather="zap"></i></div>
+                        <h3>EMG DSP Engine</h3>
+                        <p>Real-time filtering of muscle noise to extract clean "trigger" signals from residual limbs.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon"><i data-feather="move"></i></div>
+                        <h3>IMU Spatial Core</h3>
+                        <p>MPU-6050 integration for pitch, roll, and yaw detection, enabling spatial input capabilities.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon"><i data-feather="wifi"></i></div>
+                        <h3>Low-Latency WebSocket</h3>
+                        <p>ESP32 transmission over local WiFi UDP for sub-20ms response times essential for gaming.</p>
+                    </div>
+                </div>
+             </div>
+        </section>
+    </main>
+
+    <main id="view-games" class="page-view">
+        <div class="container">
+            <div class="section-header">
+                <h1>Bio-Control Arcade Prototype</h1>
+                <p>Ensure hardware is powered on. The blocks below visualize live data packets from the ESP32.</p>
+            </div>
+
+            <div class="games-grid">
+                <div class="game-display">
+                    <div style="padding: 20px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between;">
+                        <h3>EMG Jump Demo</h3>
+                        <span style="background: var(--accent-primary); color: white; padding: 4px 12px; border-radius: 20px; font-size: 0.8rem;">Flex Sensor</span>
+                    </div>
+                   <div class="game-frame-wrapper">
+                        <i data-feather="activity" size="64" style="color: var(--accent-primary); margin-bottom: 20px;"></i>
+                        <h2>Waiting for Signal...</h2>
+                        <p style="color: #aab7c4;">Quickly flex forearm muscle to trigger jump.</p>
+                    </div>
+                </div>
+
+                <div class="game-display">
+                     <div style="padding: 20px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between;">
+                        <h3>IMU Steering Demo</h3>
+                        <span style="background: var(--gradient-2); color: white; padding: 4px 12px; border-radius: 20px; font-size: 0.8rem;">Gyroscope</span>
+                    </div>
+                    <div class="game-frame-wrapper">
+                        <i data-feather="compass" size="64" style="color: var(--gradient-2); margin-bottom: 20px;"></i>
+                        <h2>Calibrating...</h2>
+                        <p style="color: #aab7c4;">Tilt forearm left/right to steer.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Initialize Icons
+        feather.replace();
+
+        // Routing Logic
+        function switchPage(pageId) {
+            document.querySelectorAll('.page-view').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById(`view-${pageId}`).classList.add('active');
+            document.getElementById(`btn-${pageId}`).classList.add('active');
+            window.scrollTo(0, 0);
+        }
+
+        // Theme Toggle Logic
+        function toggleTheme() {
+            const body = document.body;
+            body.classList.toggle('dark-mode');
+            
+            const btnIcon = document.querySelector('.theme-toggle i');
+            
+            // If we are now in dark mode
+            if(body.classList.contains('dark-mode')) {
+                // Change icon to Sun (to indicate you can switch to light)
+                document.querySelector('.theme-toggle').innerHTML = '<i data-feather="sun"></i>';
+            } else {
+                // Change icon to Moon (to indicate you can switch to dark)
+                document.querySelector('.theme-toggle').innerHTML = '<i data-feather="moon"></i>';
+            }
+            feather.replace();
+        }
+    </script>
+</body>
+</html>

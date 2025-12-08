@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Spectra Rush - Neon Reflex</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; user-select: none; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 20px; box-sizing: border-box; }
+        .hud { font-family: 'Courier New', Courier, monospace; font-weight: bold; color: #fff; text-shadow: 0 0 10px #fff; font-size: 24px; }
+        #start-screen { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: white; font-family: sans-serif; pointer-events: auto; background: rgba(0,0,0,0.9); padding: 40px; border: 2px solid #fff; border-radius: 10px; z-index: 10; box-shadow: 0 0 50px rgba(255, 0, 85, 0.3); }
+        h1 { text-transform: uppercase; letter-spacing: 5px; margin: 0 0 20px 0; text-shadow: 4px 4px 0 #ff0055; font-size: 48px; }
+        p { margin-bottom: 30px; font-size: 18px; line-height: 1.5; color: #ccc; }
+        button { background: transparent; color: #fff; border: 2px solid #00ccff; padding: 15px 40px; font-size: 18px; cursor: pointer; text-transform: uppercase; letter-spacing: 2px; transition: 0.3s; font-weight: bold; }
+        button:hover { background: #00ccff; color: #000; box-shadow: 0 0 20px #00ccff; }
+        
+        #game-over { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 20; flex-direction: column; align-items: center; justify-content: center; pointer-events: auto; }
+        #game-over h2 { color: #ff0055; font-size: 60px; text-transform: uppercase; margin: 0; text-shadow: 0 0 20px #ff0055; }
+        #final-score { color: #fff; font-size: 30px; margin: 20px 0; font-family: 'Courier New', monospace; }
+    </style>
+    <!-- Import Three.js and Post Processing -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="ui-layer">
+        <div class="hud" id="score-display">SCORE: 0</div>
+        <div class="hud" style="font-size: 14px; opacity: 0.7;">SPACE: Switch Polarity | ARROWS: Move</div>
+    </div>
+
+    <div id="start-screen">
+        <h1>Spectra Rush</h1>
+        <p>Match colors to break gates.<br>Dodge opposite colors and spikes.<br>Use <b>Arrow Keys</b> to move and <b>Space</b> to switch color.</p>
+        <button id="start-btn">INITIALIZE RUN</button>
+    </div>
+
+    <div id="game-over">
+        <h2>SYSTEM FAILURE</h2>
+        <div id="final-score">SCORE: 0</div>
+        <button id="retry-btn">REBOOT SYSTEM</button>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- CONSTANTS & CONFIG ---
+        const COLORS = {
+            PINK: 0xFF0055,
+            BLUE: 0x00CCFF,
+            WHITE: 0xFFFFFF,
+            DARK: 0x111111,
+            GRID: 0x220033
+        };
+
+        const LANES = [-3, 0, 3]; // Left, Center, Right x-positions
+        const GAME_SPEED_START = 40;
+        const GAME_SPEED_MAX = 100;
+
+        // --- AUDIO ENGINE (Web Audio API) ---
+        class SynthAudio {
+            constructor() {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+                this.masterGain = this.ctx.createGain();
+                this.masterGain.gain.value = 0.3; // Lower volume
+                this.masterGain.connect(this.ctx.destination);
+                this.isPlaying = false;
+                this.nextNoteTime = 0;
+                this.tempo = 120;
+                this.noteIndex = 0;
+                // Simple Arpeggio Pattern
+                this.bassLine = [36, 36, 48, 36, 39, 36, 43, 41]; // MIDI notes
+            }
+
+            resume() {
+                if (this.ctx.state === 'suspended') this.ctx.resume();
+                this.isPlaying = true;
+                this.nextNoteTime = this.ctx.currentTime;
+                this.scheduler();
+            }
+
+            stop() {
+                this.isPlaying = false;
+            }
+
+            scheduler() {
+                if (!this.isPlaying) return;
+                while (this.nextNoteTime < this.ctx.currentTime + 0.1) {
+                    this.playBassNote(this.bassLine[this.noteIndex], this.nextNoteTime);
+                    this.noteIndex = (this.noteIndex + 1) % this.bassLine.length;
+                    this.nextNoteTime += (60.0 / this.tempo) / 2; // 8th notes
+                }
+                setTimeout(() => this.scheduler(), 25);
+            }
+
+            playBassNote(note, time) {
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                const filter = this.ctx.createBiquadFilter();
+
+                osc.type = 'sawtooth';
+                osc.frequency.value = 440 * Math.pow(2, (note - 69) / 12);
+                
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(800, time);
+                filter.frequency.exponentialRampToValueAtTime(100, time + 0.2);
+
+                gain.gain.setValueAtTime(0.5, time);
+                gain.gain.exponentialRampToValueAtTime(0.01, time + 0.2);
+
+                osc.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.masterGain);
+
+                osc.start(time);
+                osc.stop(time + 0.2);
+            }
+
+            playShatter() {
+                const bufferSize = this.ctx.sampleRate * 0.2; // 0.2 seconds
+                const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+                const noise = this.ctx.createBufferSource();
+                noise.buffer = buffer;
+                const gain = this.ctx.createGain();
+                
+                // High pass to make it "glassy"
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'highpass';
+                filter.frequency.value = 2000;
+
+                gain.gain.setValueAtTime(0.8, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.masterGain);
+                noise.start();
+            }
+
+            playSwitch() {
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(800, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1200, this.ctx.currentTime + 0.1);
+                
+                gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.1);
+
+                osc.connect(gain);
+                gain.connect(this.masterGain);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.1);
+            }
+
+            playCrash() {
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(100, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(10, this.ctx.currentTime + 0.5);
+                
+                gain.gain.setValueAtTime(0.8, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.5);
+
+                osc.connect(gain);
+                gain.connect(this.masterGain);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.5);
+            }
+        }
+
+        // --- SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.03);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 3, 7);
+        camera.lookAt(0, 0, -10);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.toneMapping = THREE.ReinhardToneMapping;
+        document.body.appendChild(renderer.domElement);
+
+        // --- POST PROCESSING (BLOOM) ---
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0;
+        bloomPass.strength = 2.0; // Intense glow
+        bloomPass.radius = 0.5;
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // --- GAME OBJECTS ---
+        
+        // 1. The Grid
+        const gridHelper = new THREE.GridHelper(200, 100, COLORS.PINK, COLORS.GRID);
+        gridHelper.position.y = -1;
+        gridHelper.position.z = -50;
+        gridHelper.scale.z = 5; // Stretch it out
+        scene.add(gridHelper);
+
+        // 2. The Player (Tetrahedron)
+        const playerGeo = new THREE.TetrahedronGeometry(1);
+        const playerMat = new THREE.MeshBasicMaterial({ color: COLORS.PINK });
+        const player = new THREE.Mesh(playerGeo, playerMat);
+        player.position.y = 0.5;
+        scene.add(player);
+
+        // Player State
+        let currentLane = 1; // 0=Left, 1=Center, 2=Right
+        let targetX = 0;
+        let polarity = 0; // 0=Pink, 1=Blue
+        let speed = GAME_SPEED_START;
+        let score = 0;
+        let isRunning = false;
+        
+        // Particle System (Explosions)
+        const particles = [];
+        const particleGeo = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+        
+        function createExplosion(pos, color) {
+            for(let i=0; i<12; i++) {
+                const mat = new THREE.MeshBasicMaterial({ color: color });
+                const mesh = new THREE.Mesh(particleGeo, mat);
+                mesh.position.copy(pos);
+                // Random velocity
+                mesh.userData = {
+                    vel: new THREE.Vector3(
+                        (Math.random() - 0.5) * 10,
+                        (Math.random() - 0.5) * 10,
+                        (Math.random() - 0.5) * 10
+                    ),
+                    life: 1.0
+                };
+                scene.add(mesh);
+                particles.push(mesh);
+            }
+        }
+
+        // Obstacles
+        const obstacles = [];
+        const OBSTACLE_TYPES = {
+            GATE_PINK: 0,
+            GATE_BLUE: 1,
+            SPIKE: 2
+        };
+
+        function spawnObstacle() {
+            const laneIndex = Math.floor(Math.random() * 3);
+            const xPos = LANES[laneIndex];
+            const typeProb = Math.random();
+            let type;
+
+            if (typeProb < 0.45) type = OBSTACLE_TYPES.GATE_PINK;
+            else if (typeProb < 0.90) type = OBSTACLE_TYPES.GATE_BLUE;
+            else type = OBSTACLE_TYPES.SPIKE;
+
+            let geometry, material, mesh;
+
+            if (type === OBSTACLE_TYPES.SPIKE) {
+                // Spike Geometry (Cone)
+                geometry = new THREE.ConeGeometry(0.8, 2, 4);
+                material = new THREE.MeshBasicMaterial({ color: 0x333333, wireframe: true }); // Dark, menacing
+                mesh = new THREE.Mesh(geometry, material);
+                mesh.position.y = 0;
+            } else {
+                // Gate Geometry (Thin Box)
+                geometry = new THREE.BoxGeometry(2.8, 2.8, 0.1);
+                // Inner "Frame" to look cool
+                const frameGeo = new THREE.BoxGeometry(2.5, 2.5, 0.15);
+                
+                const color = (type === OBSTACLE_TYPES.GATE_PINK) ? COLORS.PINK : COLORS.BLUE;
+                material = new THREE.MeshBasicMaterial({ 
+                    color: color, 
+                    transparent: true, 
+                    opacity: 0.4,
+                    side: THREE.DoubleSide
+                });
+                
+                mesh = new THREE.Mesh(geometry, material);
+                
+                // Add a solid frame
+                const frameMat = new THREE.MeshBasicMaterial({ color: color, wireframe: true });
+                const frame = new THREE.Mesh(geometry, frameMat);
+                mesh.add(frame);
+                
+                mesh.position.y = 0.5;
+            }
+
+            mesh.position.x = xPos;
+            mesh.position.z = -100; // Spawn far away
+            mesh.userData = { type: type, active: true };
+            
+            scene.add(mesh);
+            obstacles.push(mesh);
+        }
+
+        // --- GAME LOGIC ---
+
+        const synth = new SynthAudio();
+        let lastTime = 0;
+        let spawnTimer = 0;
+        let shakeIntensity = 0;
+
+        function update(time) {
+            requestAnimationFrame(update);
+
+            const dt = (time - lastTime) / 1000;
+            lastTime = time;
+
+            if (!isRunning) {
+                renderer.render(scene, camera);
+                return;
+            }
+
+            // 1. Movement
+            // Lerp Player X
+            player.position.x += (targetX - player.position.x) * 10 * dt;
+            // Float effect
+            player.position.y = 0.5 + Math.sin(time * 0.005) * 0.1;
+            // Rotate player based on speed
+            player.rotation.z -= speed * dt * 0.1;
+            player.rotation.x -= speed * dt * 0.05;
+
+            // Move Grid to simulate speed
+            gridHelper.position.z += speed * dt;
+            if (gridHelper.position.z > 0) gridHelper.position.z = -50;
+
+            // 2. Obstacles
+            spawnTimer += dt;
+            // Spawn faster as speed increases
+            const spawnRate = Math.max(0.3, 1.5 - (speed / 100)); 
+            
+            if (spawnTimer > spawnRate) {
+                spawnObstacle();
+                spawnTimer = 0;
+            }
+
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                const obs = obstacles[i];
+                obs.position.z += speed * dt;
+
+                // Collision
+                const distZ = Math.abs(obs.position.z - player.position.z);
+                const distX = Math.abs(obs.position.x - player.position.x);
+
+                if (obs.userData.active && distZ < 1.0 && distX < 1.0) {
+                    handleCollision(obs);
+                }
+
+                // Cleanup
+                if (obs.position.z > 10) {
+                    scene.remove(obs);
+                    obstacles.splice(i, 1);
+                }
+            }
+
+            // 3. Particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.userData.life -= dt * 2;
+                p.position.addScaledVector(p.userData.vel, dt);
+                p.rotation.x += dt;
+                
+                if (p.userData.life <= 0) {
+                    scene.remove(p);
+                    particles.splice(i, 1);
+                } else {
+                    p.scale.setScalar(p.userData.life);
+                }
+            }
+
+            // 4. Camera Shake
+            if (shakeIntensity > 0) {
+                camera.position.x = (Math.random() - 0.5) * shakeIntensity;
+                camera.position.y = 3 + (Math.random() - 0.5) * shakeIntensity;
+                shakeIntensity = Math.max(0, shakeIntensity - dt * 2);
+            } else {
+                camera.position.x = 0;
+                camera.position.y = 3;
+            }
+
+            // 5. Difficulty scaling
+            if (speed < GAME_SPEED_MAX) speed += dt * 0.5;
+
+            composer.render();
+        }
+
+        function handleCollision(obs) {
+            const type = obs.userData.type;
+            
+            // Logic:
+            // IF Spike -> Die
+            // IF Gate Pink AND Player Pink -> Score
+            // IF Gate Pink AND Player Blue -> Die
+            // IF Gate Blue AND Player Blue -> Score
+            // IF Gate Blue AND Player Pink -> Die
+
+            let hit = false;
+            let goodHit = false;
+
+            if (type === OBSTACLE_TYPES.SPIKE) {
+                hit = true; 
+                goodHit = false;
+            } else if (type === OBSTACLE_TYPES.GATE_PINK) {
+                hit = true;
+                goodHit = (polarity === 0);
+            } else if (type === OBSTACLE_TYPES.GATE_BLUE) {
+                hit = true;
+                goodHit = (polarity === 1);
+            }
+
+            if (hit) {
+                obs.userData.active = false; // Prevent double hits
+
+                if (goodHit) {
+                    // Success
+                    score += 10;
+                    document.getElementById('score-display').innerText = `SCORE: ${score}`;
+                    scene.remove(obs); // Instantly remove gate
+                    createExplosion(obs.position, polarity === 0 ? COLORS.PINK : COLORS.BLUE);
+                    synth.playShatter();
+                    shakeIntensity = 0.2; // Slight shake
+                } else {
+                    // Failure
+                    gameOver();
+                }
+            }
+        }
+
+        function switchPolarity() {
+            polarity = polarity === 0 ? 1 : 0;
+            const color = polarity === 0 ? COLORS.PINK : COLORS.BLUE;
+            player.material.color.setHex(color);
+            synth.playSwitch();
+            
+            // Visual pop
+            player.scale.setScalar(1.5);
+            setTimeout(() => player.scale.setScalar(1), 100);
+        }
+
+        function move(dir) {
+            if (dir === -1 && currentLane > 0) currentLane--;
+            if (dir === 1 && currentLane < 2) currentLane++;
+            targetX = LANES[currentLane];
+        }
+
+        // --- INPUT HANDLING ---
+        window.addEventListener('keydown', (e) => {
+            if (!isRunning) return;
+
+            if (e.code === 'Space') switchPolarity();
+            if (e.code === 'ArrowLeft' || e.code === 'KeyA') move(-1);
+            if (e.code === 'ArrowRight' || e.code === 'KeyD') move(1);
+        });
+
+        // --- GAME STATE CONTROL ---
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over');
+        
+        function startGame() {
+            startScreen.style.display = 'none';
+            gameOverScreen.style.display = 'none';
+            
+            // Reset State
+            score = 0;
+            speed = GAME_SPEED_START;
+            currentLane = 1;
+            targetX = LANES[1];
+            polarity = 0;
+            player.material.color.setHex(COLORS.PINK);
+            document.getElementById('score-display').innerText = `SCORE: 0`;
+
+            // Clear Obstacles
+            obstacles.forEach(o => scene.remove(o));
+            obstacles.length = 0;
+
+            isRunning = true;
+            synth.resume();
+        }
+
+        function gameOver() {
+            isRunning = false;
+            synth.playCrash();
+            synth.stop();
+            shakeIntensity = 1.0;
+            
+            document.getElementById('final-score').innerText = `FINAL SCORE: ${score}`;
+            gameOverScreen.style.display = 'flex';
+        }
+
+        document.getElementById('start-btn').addEventListener('click', startGame);
+        document.getElementById('retry-btn').addEventListener('click', startGame);
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start Loop
+        update(0);
+
+    </script>
+</body>
+</html>
