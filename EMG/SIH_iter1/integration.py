@@ -11,12 +11,14 @@ Behavior changes from your original:
  - Sliding vote window: we append one vote for each decision and let deque(maxlen=window) slide it.
  - Threshold slider updates the threshold line AND recomputes votes immediately.
  - Dark theme applied to ttk and matplotlib.
+ - AUTO-SPACE: when Active is detected, the GUI will send a space press (using the `keyboard` module)
+   and enforce a cooldown (default 1.0 s) before sending the next space.
 
 Run:
     python emg_realtime_dark.py
 
 Dependencies:
-    pip install pyserial joblib numpy matplotlib
+    pip install pyserial joblib numpy matplotlib keyboard
 """
 from __future__ import annotations
 import threading
@@ -26,7 +28,6 @@ from collections import deque
 import numpy as np
 import os
 import sys
-import keyboard
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -41,6 +42,14 @@ from model_wrapper import ModelWrapper
 
 # Serial (only used when not simulating)
 import serial
+
+# keyboard: may require elevated permissions on some OSes; handled defensively
+try:
+    import keyboard
+    _KEYBOARD_AVAILABLE = True
+except Exception:
+    keyboard = None
+    _KEYBOARD_AVAILABLE = False
 
 # ------------------ Default config (can be edited in GUI) ------------------
 DEFAULT_COM = "COM11"
@@ -67,7 +76,7 @@ class SerialWorker(threading.Thread):
                  simulate=False, sim_rate_hz=100):
         super().__init__(daemon=True)
         self.com = com
-        self.baud = int(baud)
+        self.baud = int(baud) if baud else DEFAULT_BAUD
         self.model_path = model_path
         self.scaler_path = scaler_path
         self.le_path = le_path
@@ -199,7 +208,7 @@ class SerialWorker(threading.Thread):
                         try:
                             p_active = float(self.model_wrapper.predict_proba_active(feats_2d))
                         except Exception:
-                            print("probabilty set to 0")
+                            print("probability set to 0")
                             p_active = 0.0
 
                         # EMA
@@ -231,12 +240,6 @@ class SerialWorker(threading.Thread):
 
 # -------------------- GUI --------------------
 
-# dark theme helper
-import keyboard
-import time
-
-    
-    
 def apply_dark_ttk_style(root):
     style = ttk.Style(root)
     try:
@@ -281,6 +284,11 @@ class EMGGUI(tk.Tk):
 
         # EMA state
         self.ema_prob = None
+
+        # space-send state
+        self.send_space_var = tk.BooleanVar(value=True)   # enable/disable auto-space
+        self.space_cooldown_var = tk.DoubleVar(value=1.0) # seconds
+        self.last_space_time = 0.0
 
         self._build_controls()
         self._build_plots()
@@ -350,6 +358,11 @@ class EMGGUI(tk.Tk):
         self.req_votes_var = tk.IntVar(value=self.req_votes)
         ttk.Entry(middle, textvariable=self.req_votes_var, width=6).grid(row=3, column=3)
 
+        # auto-space controls (new)
+        ttk.Checkbutton(middle, text="Send Space on ACTIVE", variable=self.send_space_var).grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(6,0))
+        ttk.Label(middle, text="Cooldown (s):").grid(row=4, column=2)
+        ttk.Entry(middle, textvariable=self.space_cooldown_var, width=6).grid(row=4, column=3)
+
         # right: status
         right = ttk.Frame(frm)
         right.pack(side=tk.RIGHT, padx=6)
@@ -404,11 +417,11 @@ class EMGGUI(tk.Tk):
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         # initial empty lines (high contrast)
-        self.raw_line, = self.ax_raw.plot([], [], color='#7ee787')
-        self.prob_line, = self.ax_prob.plot([], [], color='#4FD1C5')
+        self.raw_line, = self.ax_raw.plot([], [])
+        self.prob_line, = self.ax_prob.plot([], [])
 
         # threshold line (store and update when slider moves)
-        self.threshold_line = self.ax_prob.axhline(self.threshold_var.get(), linestyle='--', color='#ffb86b')
+        self.threshold_line = self.ax_prob.axhline(self.threshold_var.get(), linestyle='--')
 
         # autoscale flags
         self.raw_xlim = 500
@@ -465,6 +478,9 @@ class EMGGUI(tk.Tk):
         self.req_votes = req_votes
         self.votes = deque([], maxlen=self.vote_window)
 
+        # reset space timer
+        self.last_space_time = 0.0
+
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
         self._log(f"Started worker on {com or 'SIMULATE'}@{baud or 'sim'}")
@@ -477,6 +493,42 @@ class EMGGUI(tk.Tk):
         self._log('Stopping worker...')
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
+
+    def _maybe_send_space(self, is_active: bool):
+        """
+        If auto-space is enabled and cooldown elapsed and is_active True -> press space.
+        Defensive: wrap in try/except since keyboard module can fail in some environments.
+        """
+        if not self.send_space_var.get():
+            return False
+
+        if not is_active:
+            return False
+
+        try:
+            cooldown = float(self.space_cooldown_var.get())
+        except Exception:
+            cooldown = 1.0
+
+        now = time.time()
+        if now - self.last_space_time >= cooldown:
+            if _KEYBOARD_AVAILABLE:
+                try:
+                    keyboard.press_and_release('space')
+                    self.last_space_time = now
+                    self._log(f"Auto-space sent (cooldown {cooldown:.2f}s)")
+                    return True
+                except Exception as e:
+                    self._log(f"Failed to send space key: {e}")
+                    return False
+            else:
+                self._log("keyboard module not available — can't send space")
+                return False
+        else:
+            # still in cooldown
+            remaining = cooldown - (now - self.last_space_time)
+            # optionally log small message (kept minimal)
+            return False
 
     def _process_queue(self):
         processed = False
@@ -529,6 +581,14 @@ class EMGGUI(tk.Tk):
                 self.p_used_var.set(f"{p_used:.3f}")
                 self.votes_var.set(f"{votes_sum}/{votes_len}")
                 self.label_var.set(label_str)
+
+                # NEW: send space when ACTIVE (with cooldown)
+                # call helper that will press space if allowed
+                try:
+                    triggered = self._maybe_send_space(is_active)
+                    # optionally you can change label or status when triggered (we log inside)
+                except Exception as e:
+                    self._log(f"Auto-space error: {e}")
 
             elif kind == 'info':
                 self._log(str(data))
