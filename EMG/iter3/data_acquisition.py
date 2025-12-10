@@ -10,7 +10,7 @@ import os
 import numpy as np
 
 
-COM_PORT = 'COM11'
+COM_PORT = 'COM5'
 BAUD_RATE = 115200
 MAX_SAMPLES = 2000        # history shown on screen
 Y_MIN = 0

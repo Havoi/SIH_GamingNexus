@@ -10,11 +10,11 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 # ======================================================
 # CONFIG
 # ======================================================
-CSV_PATH = "emg_features_combined_2class_noisy.csv"
+CSV_PATH = "emg_features_combined_2class_anirudh_randomnoise.csv"
 
-MODEL_OUT = "emg_mlp_model_clean_noisy.joblib"
-SCALER_OUT = "emg_scaler_clean_noisy.pkl"
-ENCODER_OUT = "emg_label_encoder_clean_noisy.pkl"
+MODEL_OUT = "emg_mlp_model_clean_radnomextnoisy.joblib"
+SCALER_OUT = "emg_scaler_clean_randomextnoisy.pkl"
+ENCODER_OUT = "emg_label_encoder_clean_randomextnoisy.pkl"
 
 FEATURE_COLUMNS = [
     "MAV", "RMS", "VAR", "WL",

@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>IMU Control Panel — 6-axis Revamp</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root{
+    --bg:#071427;
+    --panel:#0f1720;
+    --muted:#94a3b8;
+    --accent:#78a1ff;
+    --card:#071022;
+    --log-bg:#020617;
+    --good:#86efac;
+    --bad:#fca5a5;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;color:#e6eef6;background:linear-gradient(180deg,#041022 0%, #071427 100%);}
+  #app{display:flex; height:100vh; gap:12px; padding:12px; box-sizing:border-box;}
+  #left{width:420px; min-width:340px; background:var(--panel); border-radius:10px; padding:14px; box-sizing:border-box; display:flex; flex-direction:column; gap:12px; border:1px solid rgba(255,255,255,0.03);}
+  h1{margin:0;font-size:18px;font-weight:700;letter-spacing:0.2px;}
+  .muted{color:var(--muted); font-size:13px;}
+  .row{display:flex; gap:8px; align-items:center;}
+  .btn{background:#0f2230;color:#e6eef6;border:1px solid #12303f;padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:600;}
+  .btn:active{transform:translateY(1px);}
+  button.full{width:100%;}
+  input[type=range]{width:100%;}
+  #log{background:var(--log-bg); color:#9cc3ff; padding:8px; height:140px; overflow:auto; border-radius:8px; border:1px solid #0f2740; font-family:monospace; font-size:12px; white-space:pre-wrap;}
+  .teleGrid{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+  .teleBox{background:var(--card); border:1px solid #12303f; padding:10px; border-radius:8px; font-family:monospace; font-size:13px;}
+  label{font-size:13px;color:#cbd5e1;}
+  .controlGrid{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+  .small{font-size:13px;color:var(--muted);}
+  .footer{margin-top:auto;font-size:12px;color:var(--muted);}
+  #visualCard{flex:1;background:linear-gradient(180deg,#071427 0%, #051024 100%);border-radius:10px;padding:10px; display:flex; flex-direction:column; gap:10px; border:1px solid rgba(255,255,255,0.03);}
+  #visual{flex:1;border-radius:8px; overflow:hidden; position:relative; background:transparent;}
+  #hud{display:flex; gap:8px; align-items:center;}
+  .chip{background:rgba(255,255,255,0.02); padding:6px 8px; border-radius:8px; border:1px solid rgba(255,255,255,0.02); font-weight:600;}
+  #graphs{display:flex; gap:8px; align-items:center;}
+  canvas.graph{background:rgba(0,0,0,0.12); border-radius:6px; border:1px solid rgba(255,255,255,0.03);}
+  #virtual-cursor{position:fixed; left:50%; top:50%; width:14px; height:14px; margin-left:-7px; margin-top:-7px; border-radius:50%; background: rgba(255,255,255,0.95); box-shadow:0 0 10px rgba(255,255,255,0.1); pointer-events:none; z-index:9999; transform:translate(-50%,-50%); display:none;}
+  .mapRow{display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
+  select, input[type=text]{background:#071022;color:#e6eef6;border:1px solid #12303f;padding:6px;border-radius:6px;}
+  .smallmuted{font-size:12px;color:#9fb3d6;}
+  .toggle{display:inline-flex; align-items:center; gap:6px;}
+</style>
+</head>
+<body>
+  <div id="app">
+    <div id="left">
+      <div>
+        <h1>IMU Control Panel — 6-Axis Mode</h1>
+        <div class="muted">Now supports 6-axis IMUs (accel+gyro). Send JSON: <code>{"acc":[ax,ay,az],"gyro":[gx,gy,gz],"t":...}</code> or <code>{"q":[x,y,z,w]}</code>.</div>
+      </div>
+
+      <div class="row">
+        <button id="btnConnect" class="btn">Connect</button>
+        <button id="btnDisconnect" class="btn" disabled>Disconnect</button>
+        <div style="flex:1"></div>
+        <div id="connectState" class="chip">Disconnected</div>
+      </div>
+
+      <div style="display:flex; gap:8px;">
+        <button id="btnCalGyro" class="btn">CAL_GYRO</button>
+        <button id="btnSave" class="btn">SAVE</button>
+        <button id="btnLoad" class="btn">LOAD</button>
+      </div>
+
+      <div class="controlGrid">
+        <div>
+          <label>Sample Rate (Hz) <span id="srVal">100</span></label>
+          <input id="inpFreq" type="range" min="10" max="400" step="1" value="100">
+          <div style="display:flex; gap:8px; margin-top:6px;">
+            <button id="btnSetFreq" class="btn">SET_FREQ</button>
+            <input id="freqBox" type="text" style="width:80px;" value="100">
+          </div>
+        </div>
+        <div>
+          <label>Madgwick β <span id="betaVal">0.100</span></label>
+          <input id="inpBeta" type="range" min="0" max="1" step="0.001" value="0.1">
+          <div style="display:flex; gap:8px; margin-top:6px;">
+            <button id="btnSetBeta" class="btn">SET_BETA</button>
+            <input id="betaBox" type="text" style="width:80px;" value="0.1">
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:8px;">
+        <button id="btnInfo" class="btn">INFO</button>
+        <button id="btnResetBias" class="btn">RESET_BIAS</button>
+        <button id="btnCalMagDisabled" class="btn" disabled>CAL_MAG (N/A)</button>
+      </div>
+
+      <div class="teleGrid">
+        <div class="teleBox" id="quatBox">q: —</div>
+        <div class="teleBox" id="eulerBox">Euler: —</div>
+        <div class="teleBox">t: <span id="tBox">—</span></div>
+        <div class="teleBox">freq: <span id="measFreq">—</span> Hz</div>
+      </div>
+
+      <div style="padding:8px; border-radius:8px; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.02);">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-weight:700">Axis Mapping & Mouse</div>
+          <div class="smallmuted">Map sensor → cube</div>
+        </div>
+
+        <div class="mapRow" style="margin-top:8px;">
+          <label>Cube X:
+            <select id="mapX">
+              <option value="roll">roll</option><option value="pitch">pitch</option><option value="yaw">yaw</option><option value="none">none</option>
+            </select>
+          </label>
+          <label>Cube Y:
+            <select id="mapY">
+              <option value="pitch">pitch</option><option value="roll">roll</option><option value="yaw">yaw</option><option value="none">none</option>
+            </select>
+          </label>
+          <label>Cube Z:
+            <select id="mapZ">
+              <option value="yaw">yaw</option><option value="roll">roll</option><option value="pitch">pitch</option><option value="none">none</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="mapRow" style="margin-top:8px;">
+          <label>Invert X <input type="checkbox" id="invX"></label>
+          <label>Invert Y <input type="checkbox" id="invY"></label>
+          <label>Invert Z <input type="checkbox" id="invZ"></label>
+
+          <label style="margin-left:auto;">Sensitivity
+            <input id="sensitivity" type="range" min="0.2" max="3" step="0.1" value="1" style="width:120px;">
+          </label>
+          <label>Smoothing
+            <input id="smoothing" type="range" min="0" max="0.98" step="0.01" value="0.85" style="width:120px;">
+          </label>
+        </div>
+
+        <div class="mapRow" style="margin-top:8px;">
+          <label class="toggle"><input type="checkbox" id="virtualCursorToggle"> Page Cursor</label>
+          <label class="toggle"><input type="checkbox" id="useJsAhrs" checked> Use JS AHRS if no q</label>
+          <label class="toggle"><input type="checkbox" id="quatOrderToggle"> MCU q order is [w,x,y,z]</label>
+          <button id="resetAxisMapping" class="btn" style="margin-left:auto;">Reset</button>
+        </div>
+
+        <div class="mapRow" style="margin-top:8px;">
+          <button id="btnCalGlobal" class="btn">Cal Global Axis</button>
+          <button id="btnResetGlobal" class="btn">Reset Global Cal</button>
+
+          <div style="margin-left:8px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+            <div class="smallmuted" style="margin-right:6px;">Rotate frame:</div>
+            <button id="rotXpos" class="btn">X +90</button>
+            <button id="rotXneg" class="btn">X -90</button>
+            <button id="rotYpos" class="btn">Y +90</button>
+            <button id="rotYneg" class="btn">Y -90</button>
+            <button id="rotZpos" class="btn">Z +90</button>
+            <button id="rotZneg" class="btn">Z -90</button>
+          </div>
+        </div>
+
+        <div class="smallmuted" style="margin-top:6px;">Virtual cursor controls a page-level cursor. Use Sensitivity & Smoothing to tune response. Toggle quaternion order if your MCU sends w-first.</div>
+      </div>
+
+      <div>
+        <div style="margin:6px 0; color:var(--muted);">Serial Log</div>
+        <div id="log"></div>
+      </div>
+
+      <div class="footer">Web Serial (Chrome). Connect → pick Nano port. The panel will compute quaternions from acc+gyro if needed.</div>
+    </div>
+
+    <div id="visualCard">
+      <div id="hud">
+        <div class="chip" id="staleChip">No Data</div>
+        <div style="flex:1"></div>
+        <div class="chip" id="latChip">lat: — ms</div>
+        <div class="chip" id="magChip">Δq: —</div>
+      </div>
+
+      <div id="visual"></div>
+
+      <div id="graphs">
+        <canvas id="freqGraph" class="graph" width="300" height="80"></canvas>
+        <canvas id="deltaGraph" class="graph" width="300" height="80"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div id="virtual-cursor"></div>
+
+<script type="module">
+/* IMU Control Panel — 6-axis capable (JS Madgwick fallback)
+   - Accepts serial JSON lines:
+     { "q": [x,y,z,w], "t":... }  OR
+     { "acc":[ax,ay,az], "gyro":[gx,gy,gz], "t":... }
+   - If no q is present and 'Use JS AHRS' checked, computes quaternion from acc+gyro using Madgwick
+   - Rest of UI is same as your revamp
+*/
+
+import * as THREE from 'https://unpkg.com/three@0.154.0/build/three.module.js';
+
+/* ---------- DOM ---------- */
+const logEl = document.getElementById('log');
+const btnConnect = document.getElementById('btnConnect');
+const btnDisconnect = document.getElementById('btnDisconnect');
+const btnCalGyro = document.getElementById('btnCalGyro');
+const btnSave = document.getElementById('btnSave');
+const btnLoad = document.getElementById('btnLoad');
+const btnInfo = document.getElementById('btnInfo');
+const btnResetBias = document.getElementById('btnResetBias');
+
+const inpFreq = document.getElementById('inpFreq');
+const srVal = document.getElementById('srVal');
+const btnSetFreq = document.getElementById('btnSetFreq');
+const freqBox = document.getElementById('freqBox');
+
+const inpBeta = document.getElementById('inpBeta');
+const betaVal = document.getElementById('betaVal');
+const btnSetBeta = document.getElementById('btnSetBeta');
+const betaBox = document.getElementById('betaBox');
+
+const quatBox = document.getElementById('quatBox');
+const eulerBox = document.getElementById('eulerBox');
+const tBox = document.getElementById('tBox');
+const measFreq = document.getElementById('measFreq');
+const connectState = document.getElementById('connectState');
+const staleChip = document.getElementById('staleChip');
+const latChip = document.getElementById('latChip');
+const magChip = document.getElementById('magChip');
+
+const mapX = document.getElementById('mapX');
+const mapY = document.getElementById('mapY');
+const mapZ = document.getElementById('mapZ');
+const invX = document.getElementById('invX');
+const invY = document.getElementById('invY');
+const invZ = document.getElementById('invZ');
+const sensSlider = document.getElementById('sensitivity');
+const smoothSlider = document.getElementById('smoothing');
+const virtualCursorToggle = document.getElementById('virtualCursorToggle');
+const resetAxisMapping = document.getElementById('resetAxisMapping');
+const quatOrderToggle = document.getElementById('quatOrderToggle');
+const useJsAhrs = document.getElementById('useJsAhrs');
+const virtualCursor = document.getElementById('virtual-cursor');
+
+const btnCalGlobal = document.getElementById('btnCalGlobal');
+const btnResetGlobal = document.getElementById('btnResetGlobal');
+const rotXpos = document.getElementById('rotXpos');
+const rotXneg = document.getElementById('rotXneg');
+const rotYpos = document.getElementById('rotYpos');
+const rotYneg = document.getElementById('rotYneg');
+const rotZpos = document.getElementById('rotZpos');
+const rotZneg = document.getElementById('rotZneg');
+
+/* ---------- State ---------- */
+let port = null, reader = null, writer = null;
+let keepReading = false, inputDone = null, outputDone = null;
+let lastJSONTime = 0, lastFrameTime = performance.now(), frameCount = 0, measuredHz = 0;
+let lastAppliedEuler = null, lastAppliedQuat = null, lastRawQuat = null, lastDeltaMag = 0;
+
+let globalCalQuat = null, offsetQuat = new THREE.Quaternion();
+
+/* ---------- Graph buffers ---------- */
+function RingBuffer(size){ this.size=size; this.buf=new Array(size).fill(0); this.i=0; this.full=false; }
+RingBuffer.prototype.push=function(v){ this.buf[this.i++]=v; if(this.i>=this.size){this.i=0; this.full=true;} }
+RingBuffer.prototype.array=function(){ return this.full? this.buf.slice(this.i).concat(this.buf.slice(0,this.i)) : this.buf.slice(0,this.i); }
+const freqBuf = new RingBuffer(120), deltaBuf = new RingBuffer(120);
+const freqCanvas = document.getElementById('freqGraph'), dfreq = freqCanvas.getContext('2d');
+const deltaCanvas = document.getElementById('deltaGraph'), ddelta = deltaCanvas.getContext('2d');
+function clearGraph(ctx,w,h){ ctx.clearRect(0,0,w,h); ctx.fillStyle='rgba(255,255,255,0.02)'; ctx.fillRect(0,0,w,h); }
+function drawLine(ctx,data,opts={}){ const w=ctx.canvas.width,h=ctx.canvas.height; clearGraph(ctx,w,h); if(!data||data.length===0) return; const maxv=opts.max||Math.max(...data,1e-6); ctx.beginPath(); for(let i=0;i<data.length;i++){ const x=(i/(data.length-1))*w; const y=h-(data[i]/maxv)*h; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); } ctx.strokeStyle=opts.color||'#78a1ff'; ctx.lineWidth=2; ctx.stroke(); }
+
+/* ---------- THREE scene ---------- */
+const visual = document.getElementById('visual');
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x071427);
+const camera = new THREE.PerspectiveCamera(60, visual.clientWidth/visual.clientHeight, 0.1, 1000);
+camera.position.set(2.2,2.0,3.5);
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true}); renderer.setSize(visual.clientWidth, visual.clientHeight);
+visual.appendChild(renderer.domElement); window.addEventListener('resize',()=>{ renderer.setSize(visual.clientWidth, visual.clientHeight); camera.aspect = visual.clientWidth/visual.clientHeight; camera.updateProjectionMatrix(); });
+
+let isPointerDown=false, lastX=0, lastY=0, yaw=0, pitch=-0.4;
+renderer.domElement.addEventListener('pointerdown',(e)=>{ isPointerDown=true; lastX=e.clientX; lastY=e.clientY; renderer.domElement.setPointerCapture(e.pointerId); });
+renderer.domElement.addEventListener('pointerup',(e)=>{ isPointerDown=false; try{ renderer.domElement.releasePointerCapture(e.pointerId); }catch{} });
+renderer.domElement.addEventListener('pointermove',(e)=>{ if(!isPointerDown) return; let dx=(e.clientX-lastX)/200, dy=(e.clientY-lastY)/200; yaw += dx; pitch += dy; lastX=e.clientX; lastY=e.clientY; });
+
+const axes = new THREE.AxesHelper(1.6); scene.add(axes);
+const geo = new THREE.BoxGeometry(1.0,0.6,1.6);
+const mat = new THREE.MeshStandardMaterial({color:0x78a1ff, metalness:0.2, roughness:0.35});
+const cube = new THREE.Mesh(geo, mat); scene.add(cube);
+const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.9); scene.add(hemi);
+const dir = new THREE.DirectionalLight(0xffffff, 0.8); dir.position.set(5,5,5); scene.add(dir);
+const grid = new THREE.GridHelper(8, 16, 0x1b3c44, 0x0b2230); scene.add(grid);
+
+function animate(){ requestAnimationFrame(animate); camera.position.x = Math.cos(yaw)*4; camera.position.z = Math.sin(yaw)*4; camera.position.y = 2.2 + Math.sin(pitch)*0.6; camera.lookAt(0,0,0); renderer.render(scene,camera); }
+animate();
+
+/* ---------- Madgwick JS implementation (lightweight) ---------- */
+class MadgwickJS {
+  constructor(beta=0.1){
+    this.beta = beta;
+    this.q0 = 1; this.q1 = 0; this.q2 = 0; this.q3 = 0;
+  }
+  invSqrt(x){ return 1.0 / Math.sqrt(x); }
+  update(gx,gy,gz,ax,ay,az,dt){
+    // gx,gy,gz in rad/s ; ax,ay,az in g
+    if (ax===0 && ay===0 && az===0) return;
+    let q0=this.q0,q1=this.q1,q2=this.q2,q3=this.q3;
+    // normalize accel
+    let recipNorm = this.invSqrt(ax*ax + ay*ay + az*az);
+    ax *= recipNorm; ay *= recipNorm; az *= recipNorm;
+    let _2q0 = 2*q0, _2q1 = 2*q1, _2q2 = 2*q2, _2q3 = 2*q3;
+    let _4q0 = 4*q0, _4q1 = 4*q1, _4q2 = 4*q2, _8q1 = 8*q1, _8q2 = 8*q2;
+    let f1 = 2*(q1*q3 - q0*q2) - ax;
+    let f2 = 2*(q0*q1 + q2*q3) - ay;
+    let f3 = 2*(0.5 - q1*q1 - q2*q2) - az;
+    let s0 = -_2q2 * f1 + _2q1 * f2;
+    let s1 = _2q3 * f1 + _2q0 * f2 - _4q1 * f3;
+    let s2 = -_2q0 * f1 + _2q3 * f2 - _4q2 * f3;
+    let s3 = _2q1 * f1 + _2q2 * f2;
+    recipNorm = this.invSqrt(s0*s0 + s1*s1 + s2*s2 + s3*s3);
+    s0 *= recipNorm; s1 *= recipNorm; s2 *= recipNorm; s3 *= recipNorm;
+    let qDot0 = 0.5 * (-q1*gx - q2*gy - q3*gz) - this.beta * s0;
+    let qDot1 = 0.5 * ( q0*gx + q2*gz - q3*gy) - this.beta * s1;
+    let qDot2 = 0.5 * ( q0*gy - q1*gz + q3*gx) - this.beta * s2;
+    let qDot3 = 0.5 * ( q0*gz + q1*gy - q2*gx) - this.beta * s3;
+    q0 += qDot0 * dt; q1 += qDot1 * dt; q2 += qDot2 * dt; q3 += qDot3 * dt;
+    recipNorm = this.invSqrt(q0*q0 + q1*q1 + q2*q2 + q3*q3);
+    this.q0 = q0*recipNorm; this.q1 = q1*recipNorm; this.q2 = q2*recipNorm; this.q3 = q3*recipNorm;
+  }
+  getQuatArray(){ return [this.q0,this.q1,this.q2,this.q3]; }
+}
+
+/* instantiate Madgwick filter used when MCU doesn't send q */
+let madgwick = new MadgwickJS(0.1);
+function setMadgwickBeta(b){ madgwick.beta = b; }
+
+/* ---------- Serial helpers ---------- */
+function appendLog(s){ const time = new Date().toLocaleTimeString(); logEl.textContent += `[${time}] ${s}\n`; if (logEl.textContent.length>60000) logEl.textContent = logEl.textContent.slice(-40000); logEl.scrollTop = logEl.scrollHeight; }
+
+async function connectSerial(){
+  btnConnect.disabled = true;
+  try {
+    if (port){ try{ keepReading=false; await reader.cancel(); }catch{} try{ await port.close(); }catch{} port=null; }
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    connectState.textContent = 'Connected'; connectState.style.color = '#86efac';
+    btnConnect.disabled = true; btnDisconnect.disabled = false;
+    const encoder = new TextEncoderStream(); outputDone = encoder.readable.pipeTo(port.writable);
+    writer = encoder.writable.getWriter();
+    const decoder = new TextDecoderStream(); inputDone = port.readable.pipeTo(decoder.writable);
+    reader = decoder.readable.pipeThrough(new TransformStream(new LineBreakTransformer())).getReader();
+    keepReading = true; readLoop();
+    appendLog('Serial connected.');
+  } catch (err){
+    appendLog('Connect error: ' + err);
+    btnConnect.disabled = false; btnDisconnect.disabled = true;
+    connectState.textContent = 'Disconnected'; connectState.style.color = '#fca5a5';
+  }
+}
+
+async function disconnectSerial(){
+  keepReading = false;
+  try{ if (reader) await reader.cancel(); }catch(e){ appendLog('reader cancel: '+e); }
+  reader = null;
+  try{ if (writer) await writer.close(); }catch(e){ appendLog('writer close: '+e); }
+  writer = null;
+  try{ if (port) await port.close(); }catch(e){}
+  port = null;
+  connectState.textContent = 'Disconnected'; connectState.style.color = '#fca5a5';
+  btnConnect.disabled = false; btnDisconnect.disabled = true;
+  appendLog('Serial disconnected.');
+}
+
+async function sendCmdLine(line){
+  if (!writer){ appendLog('Not connected'); return; }
+  await writer.write(line + '\n');
+  appendLog('-> ' + line);
+}
+
+async function readLoop(){
+  if (!reader) return;
+  try {
+    while (keepReading){
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) handleLine(value);
+    }
+  } catch (e){
+    appendLog('Read loop error: ' + e);
+  } finally {
+    keepReading = false;
+    if (reader) try{ await reader.cancel(); }catch{} reader=null;
+    if (writer) try{ await writer.close(); }catch{} writer=null;
+    if (port) try{ await port.close(); }catch{} port=null;
+    connectState.textContent = 'Disconnected'; connectState.style.color = '#fca5a5';
+    btnConnect.disabled = false; btnDisconnect.disabled = true;
+    appendLog('Read loop ended.');
+  }
+}
+
+class LineBreakTransformer {
+  constructor(){ this.container = ''; }
+  transform(chunk, controller){ this.container += chunk; const lines = this.container.split(/\r?\n/); this.container = lines.pop(); lines.forEach(l=>controller.enqueue(l)); }
+  flush(controller){ if (this.container) controller.enqueue(this.container); }
+}
+
+/* ---------- Quaternion pipeline ---------- */
+function isFiniteNumber(n){ return typeof n === 'number' && isFinite(n); }
+function normalizeQ(obj){ const x=Number(obj.x), y=Number(obj.y), z=Number(obj.z), w=Number(obj.w); const mag=Math.hypot(x,y,z,w); if (!isFiniteNumber(mag) || mag < 1e-12) return {x:0,y:0,z:0,w:1}; return {x:x/mag, y:y/mag, z:z/mag, w:w/mag}; }
+function quatToEuler(q){ const quat = new THREE.Quaternion(q.x,q.y,q.z,q.w); const e = new THREE.Euler().setFromQuaternion(quat, 'ZYX'); return { roll: e.x, pitch: e.y, yaw: e.z }; }
+function applyDeadzone(v,dz){ return Math.abs(v) < dz ? 0 : v; }
+function unwrapAngle(prev, curr){ let d = curr - prev; if (d > Math.PI) curr -= 2*Math.PI; else if (d < -Math.PI) curr += 2*Math.PI; while (curr - prev > Math.PI) curr -= 2*Math.PI; while (curr - prev < -Math.PI) curr += 2*Math.PI; return curr; }
+function wrapToPi(a){ while(a>Math.PI) a-=2*Math.PI; while(a<=-Math.PI) a+=2*Math.PI; return a; }
+
+function makeInverseQuaternion(qobj){ const q=new THREE.Quaternion(qobj.x,qobj.y,qobj.z,qobj.w).normalize(); return q.clone().invert(); }
+function calibrateGlobalAxis(){ if (!lastRawQuat){ appendLog('No quaternion yet to calibrate from.'); return; } globalCalQuat = makeInverseQuaternion(lastRawQuat); appendLog('Global axis calibrated.'); }
+function resetGlobalCal(){ globalCalQuat = null; appendLog('Global axis reset.'); }
+function applyRotationOffset(axis, deg){ const rad = THREE.MathUtils.degToRad(deg); let e; if (axis==='X') e = new THREE.Euler(rad,0,0,'ZYX'); else if (axis==='Y') e = new THREE.Euler(0,rad,0,'ZYX'); else e = new THREE.Euler(0,0,rad,'ZYX'); const qrot = new THREE.Quaternion().setFromEuler(e); offsetQuat = qrot.clone().multiply(offsetQuat).normalize(); appendLog(`Applied offset ${axis} ${deg}°`); }
+function resetRotationOffset(){ offsetQuat = new THREE.Quaternion(); appendLog('Rotation offsets reset.'); }
+
+/* Core: takes a normalized qobj {x,y,z,w} and timestamp */
+function processIncomingQuaternion(rawQobj, timestamp){
+  let qnorm = normalizeQ(rawQobj);
+  let curQ = new THREE.Quaternion(qnorm.x,qnorm.y,qnorm.z,qnorm.w).normalize();
+  if (globalCalQuat) curQ = globalCalQuat.clone().multiply(curQ).normalize();
+  if (offsetQuat) curQ = offsetQuat.clone().multiply(curQ).normalize();
+  qnorm = { x: curQ.x, y: curQ.y, z: curQ.z, w: curQ.w };
+  const e = quatToEuler(qnorm);
+
+  const smoothing = Number(smoothSlider.value);
+  const sens = Number(sensSlider.value);
+  const mapping = { X: mapX.value, Y: mapY.value, Z: mapZ.value };
+  const inv = { X: invX.checked ? -1 : 1, Y: invY.checked ? -1 : 1, Z: invZ.checked ? -1 : 1 };
+
+  const mapped = {
+    x: (mapping.X==='roll' ? e.roll : (mapping.X==='pitch' ? e.pitch : (mapping.X==='yaw' ? e.yaw : (lastAppliedEuler?lastAppliedEuler.roll:0)))),
+    y: (mapping.Y==='roll' ? e.roll : (mapping.Y==='pitch' ? e.pitch : (mapping.Y==='yaw' ? e.yaw : (lastAppliedEuler?lastAppliedEuler.pitch:0)))),
+    z: (mapping.Z==='roll' ? e.roll : (mapping.Z==='pitch' ? e.pitch : (mapping.Z==='yaw' ? e.yaw : (lastAppliedEuler?lastAppliedEuler.yaw:0))))
+  };
+
+  const deadzoneRad = THREE.MathUtils.degToRad(1.5);
+  mapped.x = applyDeadzone(mapped.x, deadzoneRad) * inv.X * sens;
+  mapped.y = applyDeadzone(mapped.y, deadzoneRad) * inv.Y * sens;
+  mapped.z = applyDeadzone(mapped.z, deadzoneRad) * inv.Z * sens;
+
+  if (!lastAppliedEuler) lastAppliedEuler = { roll: mapped.x, pitch: mapped.y, yaw: mapped.z };
+  const mappedUnwrapped = {
+    x: unwrapAngle(lastAppliedEuler.roll, mapped.x),
+    y: unwrapAngle(lastAppliedEuler.pitch, mapped.y),
+    z: unwrapAngle(lastAppliedEuler.yaw, mapped.z)
+  };
+
+  const blended = {
+    x: THREE.MathUtils.lerp(lastAppliedEuler.roll, mappedUnwrapped.x, 1 - smoothing),
+    y: THREE.MathUtils.lerp(lastAppliedEuler.pitch, mappedUnwrapped.y, 1 - smoothing),
+    z: THREE.MathUtils.lerp(lastAppliedEuler.yaw, mappedUnwrapped.z, 1 - smoothing)
+  };
+
+  blended.x = wrapToPi(blended.x); blended.y = wrapToPi(blended.y); blended.z = wrapToPi(blended.z);
+
+  const targetQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(blended.x, blended.y, blended.z, 'ZYX'));
+  cube.quaternion.copy(targetQuat);
+
+  lastAppliedEuler = { roll: blended.x, pitch: blended.y, yaw: blended.z };
+  lastAppliedQuat = { x: targetQuat.x, y: targetQuat.y, z: targetQuat.z, w: targetQuat.w };
+
+  quatBox.textContent = `q: [${qnorm.x.toFixed(6)}, ${qnorm.y.toFixed(6)}, ${qnorm.z.toFixed(6)}, ${qnorm.w.toFixed(6)}]`;
+  eulerBox.textContent = `Yaw:${THREE.MathUtils.radToDeg(blended.z).toFixed(1)}° Pitch:${THREE.MathUtils.radToDeg(blended.y).toFixed(1)}° Roll:${THREE.MathUtils.radToDeg(blended.x).toFixed(1)}°`;
+  if (timestamp !== undefined) tBox.textContent = timestamp;
+
+  if (lastRawQuat){
+    const dx = qnorm.x-lastRawQuat.x, dy=qnorm.y-lastRawQuat.y, dz=qnorm.z-lastRawQuat.z, dw=qnorm.w-lastRawQuat.w;
+    const dmag = Math.hypot(dx,dy,dz,dw);
+    lastDeltaMag = dmag;
+    magChip.textContent = `Δq: ${dmag.toFixed(6)}`;
+    deltaBuf.push(dmag);
+  } else { deltaBuf.push(0); }
+  lastRawQuat = qnorm;
+}
+
+/* ---------- handle incoming serial lines ---------- */
+function handleLine(line){
+  line = line.trim(); if(!line) return;
+  // try parse JSON
+  try {
+    const obj = JSON.parse(line);
+    // If quaternion present:
+    if (obj.q && Array.isArray(obj.q) && obj.q.length>=4){
+      const arr = obj.q.map(Number);
+      if (!arr.every(isFinite)) { appendLog('Bad numeric quat'); return; }
+      let qobj;
+      if (quatOrderToggle.checked){ qobj = { x: arr[1], y: arr[2], z: arr[3], w: arr[0] }; }
+      else { qobj = { x: arr[0], y: arr[1], z: arr[2], w: arr[3] }; }
+      processIncomingQuaternion(qobj, obj.t);
+      measureFramerate();
+      lastJSONTime = Date.now();
+      return;
+    }
+    // If only acc+gyro present, use JS Madgwick (if enabled)
+    if (obj.acc && obj.gyro && useJsAhrs.checked){
+      const acc = obj.acc.map(Number); const gyro = obj.gyro.map(Number);
+      if (acc.length>=3 && gyro.length>=3 && acc.every(isFinite) && gyro.every(isFinite)){
+        // convert gyro deg/s -> rad/s
+        const gx = gyro[0]*Math.PI/180, gy = gyro[1]*Math.PI/180, gz = gyro[2]*Math.PI/180;
+        const ax = acc[0], ay = acc[1], az = acc[2];
+        // compute dt from measuredHz if available or default to 1/inpFreq
+        const dt = measuredHz > 1 ? 1.0 / measuredHz : 1.0 / Number(inpFreq.value);
+        // update Madgwick
+        madgwick.update(gx,gy,gz,ax,ay,az,dt);
+        const mq = madgwick.getQuatArray(); // [w,x,y,z]
+        const qobj = { x: mq[1], y: mq[2], z: mq[3], w: mq[0] };
+        processIncomingQuaternion(qobj, obj.t);
+        measureFramerate();
+        lastJSONTime = Date.now();
+        // show fused data in log occasionally
+        return;
+      }
+    }
+    // fallback: print entire line to log
+    appendLog(line);
+  } catch(e){
+    appendLog('Line parse error: ' + e + ' => ' + line.slice(0,200));
+  }
+}
+
+/* ---------- framerate measurement ---------- */
+function measureFramerate(){
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFrameTime >= 1000){
+    measuredHz = frameCount * 1000 / (now - lastFrameTime);
+    measFreq.textContent = measuredHz.toFixed(1);
+    freqBuf.push(measuredHz);
+    frameCount = 0; lastFrameTime = now;
+  }
+}
+
+/* ---------- stale indicator & latency ---------- */
+setInterval(()=>{
+  const now = Date.now(); const dt = lastJSONTime ? now - lastJSONTime : Infinity;
+  if (!lastJSONTime || dt > 600){ staleChip.textContent = 'Stale / No Data'; staleChip.style.color = '#fca5a5'; }
+  else { staleChip.textContent = 'Live'; staleChip.style.color = '#86efac'; }
+  const tVal = parseInt(tBox.textContent);
+  if (!Number.isNaN(tVal)){
+    let tms = tVal; if (tVal > 1e12) tms = Math.floor(tVal/1000);
+    const lat = Date.now() - tms; latChip.textContent = 'lat: ' + lat + ' ms';
+  } else latChip.textContent = 'lat: — ms';
+}, 200);
+
+/* ---------- virtual cursor ---------- */
+function pageSize(){ return { w: Math.max(document.documentElement.clientWidth, window.innerWidth||0), h: Math.max(document.documentElement.clientHeight, window.innerHeight||0) }; }
+function updateVirtualCursorFromEuler(euler){
+  const roll = euler.roll, pitch = euler.pitch, yaw = euler.yaw;
+  const nx = Math.tanh(roll), ny = Math.tanh(pitch);
+  const ps = pageSize();
+  const x = (ps.w/2) + nx*(ps.w/2)*0.9;
+  const y = (ps.h/2) - ny*(ps.h/2)*0.9;
+  if (virtualCursorToggle.checked){
+    virtualCursor.style.display = 'block';
+    virtualCursor.style.left = x + 'px'; virtualCursor.style.top = y + 'px';
+    const scale = 1 + Math.min(0.6, Math.abs(yaw)/1.6);
+    virtualCursor.style.width = (14*scale) + 'px'; virtualCursor.style.height = (14*scale) + 'px';
+    virtualCursor.style.marginLeft = -(7*scale) + 'px'; virtualCursor.style.marginTop = -(7*scale) + 'px';
+  } else virtualCursor.style.display = 'none';
+}
+
+/* ---------- graph updater ---------- */
+setInterval(()=>{ drawLine(dfreq, freqBuf.array(), { color:'#78a1ff', max: Math.max(20, ...freqBuf.array()) }); drawLine(ddelta, deltaBuf.array(), { color:'#ffd166', max: Math.max(0.001, ...deltaBuf.array()) }); }, 120);
+
+/* ---------- UI wiring ---------- */
+btnConnect.addEventListener('click', async ()=>{ await connectSerial(); });
+btnDisconnect.addEventListener('click', async ()=>{ await disconnectSerial(); });
+
+btnCalGyro.addEventListener('click', ()=> sendCmdLine('{"cmd":"calibrate"}'));
+btnSave.addEventListener('click', ()=> sendCmdLine('{"cmd":"save"}'));
+btnLoad.addEventListener('click', ()=> sendCmdLine('{"cmd":"load"}'));
+btnInfo.addEventListener('click', ()=> sendCmdLine('{"cmd":"info"}'));
+btnResetBias.addEventListener('click', ()=> sendCmdLine('{"cmd":"reset_bias"}'));
+
+inpFreq.addEventListener('input', ()=>{ srVal.textContent = inpFreq.value; freqBox.value = inpFreq.value; });
+btnSetFreq.addEventListener('click', ()=>{ const v = freqBox.value; sendCmdLine(JSON.stringify({cmd:'set',k:'freq',v:Number(v)})); inpFreq.value=v; srVal.textContent=v; });
+
+inpBeta.addEventListener('input', ()=>{ betaVal.textContent = Number(inpBeta.value).toFixed(3); betaBox.value = Number(inpBeta.value).toFixed(3); setMadgwickBeta(Number(inpBeta.value)); });
+btnSetBeta.addEventListener('click', ()=>{ const v = Number(betaBox.value); setMadgwickBeta(v); sendCmdLine(JSON.stringify({cmd:'set',k:'beta',v:v})); inpBeta.value = v; betaVal.textContent = v.toFixed(3); });
+
+freqBox.addEventListener('change', ()=>{ inpFreq.value = freqBox.value; srVal.textContent = freqBox.value; });
+betaBox.addEventListener('change', ()=>{ inpBeta.value = betaBox.value; betaVal.textContent = Number(betaBox.value).toFixed(3); setMadgwickBeta(Number(betaBox.value)); });
+
+resetAxisMapping.addEventListener('click', ()=>{ mapX.value='roll'; mapY.value='pitch'; mapZ.value='yaw'; invX.checked = invY.checked = invZ.checked = false; sensSlider.value = 1; smoothSlider.value = 0.85; });
+
+btnCalGlobal.addEventListener('click', ()=> calibrateGlobalAxis());
+btnResetGlobal.addEventListener('click', ()=> { resetGlobalCal(); resetRotationOffset(); });
+rotXpos.addEventListener('click', ()=> applyRotationOffset('X',90));
+rotXneg.addEventListener('click', ()=> applyRotationOffset('X',-90));
+rotYpos.addEventListener('click', ()=> applyRotationOffset('Y',90));
+rotYneg.addEventListener('click', ()=> applyRotationOffset('Y',-90));
+rotZpos.addEventListener('click', ()=> applyRotationOffset('Z',90));
+rotZneg.addEventListener('click', ()=> applyRotationOffset('Z',-90));
+
+window.addEventListener('keydown', (e)=>{ if(e.key==='c'||e.key==='C') btnConnect.click(); if(e.key==='d'||e.key==='D') btnDisconnect.click(); });
+
+appendLog('UI ready. Click Connect to pick your board serial port.');
+
+/* ---------- lightweight virtual cursor update ---------- */
+function updateLoop(){ requestAnimationFrame(updateLoop); if (lastAppliedEuler && virtualCursorToggle.checked) updateVirtualCursorFromEuler(lastAppliedEuler); }
+updateLoop();
+
+</script>
+</body>
+</html>

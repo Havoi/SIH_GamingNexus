@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NEON AIM TRAINER | EXPANDED</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; user-select: none; }
+        
+        /* HUD LAYER */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
+        
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
+            transform: translate(-50%, -50%); border: 2px solid #00ffcc; border-radius: 50%;
+            box-shadow: 0 0 10px #00ffcc; transition: transform 0.1s;
+        }
+        #crosshair.locked { background: #ff0055; border-color: #ff0055; transform: translate(-50%, -50%) scale(1.5); }
+        
+        /* TOP BAR */
+        .hud-top { 
+            display: flex; justify-content: space-between; padding: 20px; 
+            background: linear-gradient(to bottom, rgba(0,0,0,0.9), transparent); 
+            pointer-events: auto; /* Allow clicking buttons */
+        }
+        
+        .stat-box { color: #fff; text-shadow: 0 0 5px #00ffcc; min-width: 150px; }
+        .stat-label { font-size: 12px; color: #888; letter-spacing: 2px; text-transform: uppercase; }
+        .stat-val { font-size: 32px; font-weight: bold; font-family: 'Courier New', monospace; }
+        
+        /* CONTROLS PANEL (Right Side) */
+        .controls-panel { 
+            background: rgba(0, 15, 15, 0.8); 
+            border: 1px solid #333; 
+            padding: 15px; 
+            border-radius: 5px;
+            display: flex; 
+            flex-direction: column; 
+            gap: 8px;
+            width: 220px;
+        }
+
+        /* BUTTONS ROW */
+        .btn-row { display: flex; gap: 5px; }
+        .mini-btn {
+            flex: 1;
+            background: rgba(0, 40, 0, 0.5); border: 1px solid #444; color: #aaa; 
+            padding: 6px; font-size: 10px; cursor: pointer; text-transform: uppercase;
+            transition: 0.2s;
+        }
+        .mini-btn:hover { border-color: #00ffcc; color: #00ffcc; }
+        .mini-btn.active { background: #004444; color: #00ffcc; border-color: #00ffcc; box-shadow: 0 0 8px #00ffcc44; }
+
+        /* SLIDERS */
+        .slider-row { display: flex; flex-direction: column; gap: 2px; }
+        .slider-label { font-size: 10px; color: #00ffcc; display: flex; justify-content: space-between; }
+        input[type=range] { width: 100%; cursor: pointer; accent-color: #00ffcc; }
+        
+        /* SATURATION BARS */
+        .sat-bar-container { width: 100%; height: 4px; background: #222; margin-top: 2px; position: relative; }
+        .sat-bar { height: 100%; background: #ff0055; width: 0%; position: absolute; left: 50%; transition: width 0.05s, left 0.05s; }
+
+        /* MENU OVERLAY */
+        #menu-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 5, 10, 0.95); backdrop-filter: blur(8px);
+            display: flex; align-items: center; justify-content: center; pointer-events: auto; z-index: 100;
+        }
+        .menu-card {
+            background: rgba(0, 20, 40, 0.8); border: 1px solid #00ffcc; padding: 40px;
+            text-align: center; max-width: 500px; box-shadow: 0 0 50px rgba(0, 255, 204, 0.1);
+        }
+        h1 { color: #fff; margin: 0 0 10px 0; letter-spacing: 5px; text-transform: uppercase; font-size: 24px; }
+        p { color: #888; margin-bottom: 20px; font-size: 12px; letter-spacing: 1px; }
+        
+        .btn {
+            background: transparent; color: #00ffcc; border: 1px solid #00ffcc;
+            padding: 15px 40px; font-size: 14px; cursor: pointer; text-transform: uppercase;
+            letter-spacing: 2px; transition: 0.2s; margin: 10px 0; display: block; width: 100%;
+        }
+        .btn:hover { background: #00ffcc; color: #000; box-shadow: 0 0 20px #00ffcc; }
+        .btn:disabled { border-color: #444; color: #444; pointer-events: none; }
+        
+        input[type="file"] { display: none; }
+    </style>
+    
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+</head>
+<body>
+
+<div id="ui-layer">
+    <div class="hud-top">
+        <div class="stat-box">
+            <div class="stat-label">Score</div>
+            <div class="stat-val" id="score-val">0</div>
+        </div>
+        
+        <div class="controls-panel">
+            <div style="text-align: center; color: #fff; font-size: 10px; margin-bottom: 5px; opacity: 0.7;">SYSTEM CONFIG</div>
+            
+            <div class="btn-row">
+                <button class="mini-btn" id="ingame-inv-yaw">Inv Yaw</button>
+                <button class="mini-btn" id="ingame-inv-pitch">Inv Pitch</button>
+                <button class="mini-btn" id="ingame-recenter">Reset (R)</button>
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-label"><span>SENSITIVITY</span> <span id="lbl-sens">1.0x</span></div>
+                <input type="range" id="slider-sens" min="0.5" max="3.0" step="0.1" value="1.0">
+            </div>
+
+            <div class="slider-row">
+                <div class="slider-label"><span>SMOOTHING</span> <span id="lbl-smooth">0.15</span></div>
+                <input type="range" id="slider-smooth" min="0.01" max="0.5" step="0.01" value="0.15">
+            </div>
+
+            <div style="margin-top: 5px;">
+                <div style="font-size:9px; color:#666; display:flex; justify-content:space-between;"><span>INPUT LIMITS</span></div>
+                <div class="sat-bar-container"><div id="sat-yaw" class="sat-bar"></div></div>
+                <div style="height:2px"></div>
+                <div class="sat-bar-container"><div id="sat-pitch" class="sat-bar"></div></div>
+            </div>
+        </div>
+    </div>
+    <div id="crosshair"></div>
+</div>
+
+<div id="menu-overlay">
+    <div class="menu-card" id="start-menu">
+        <h1>Neon Protocol</h1>
+        <p>INFINITE RANGE EDITION</p>
+        
+        <button class="btn" id="btn-load">1. Load Calibration</button>
+        <input type="file" id="file-input" accept=".json">
+        
+        <button class="btn" id="btn-connect" disabled>2. Connect Controller</button>
+    </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// GAME CONSTANTS
+const GAME_MAX_FOV_YAW = 60 * (Math.PI / 180); 
+const GAME_MAX_FOV_PITCH = 35 * (Math.PI / 180);
+
+// =========================================================
+// 1. SOLVER (With Smoothing & Sensitivity)
+// =========================================================
+class IMUSolver {
+    constructor() {
+        this.yawAxis = new THREE.Vector3(0, 1, 0);
+        this.pitchAxis = new THREE.Vector3(1, 0, 0);
+        this.baseYawMult = 1.0;
+        this.basePitchMult = 1.0;
+        
+        // Toggles
+        this.userYawInv = 1.0;
+        this.userPitchInv = 1.0;
+        
+        // Dynamic Settings
+        this.sensitivity = 1.0;
+        this.smoothing = 0.15; // 0.01 (Very slow/smooth) to 1.0 (Instant)
+
+        this.range = { minYaw: -0.5, maxYaw: 0.5, minPitch: -0.5, maxPitch: 0.5 };
+        this.tareQuat = new THREE.Quaternion();
+        this.currentQuat = new THREE.Quaternion(); // The smoothed display quat
+        this.targetQuat = new THREE.Quaternion();  // The raw incoming quat
+        this.saturation = { yaw: 0, pitch: 0 };
+    }
+
+    loadProfile(json) {
+        this.yawAxis.set(json.yawAxis.x, json.yawAxis.y, json.yawAxis.z);
+        this.pitchAxis.set(json.pitchAxis.x, json.pitchAxis.y, json.pitchAxis.z);
+        this.baseYawMult = json.yawMultiplier || 1.0;
+        this.basePitchMult = json.pitchMultiplier || 1.0;
+        if (json.range) this.range = json.range;
+    }
+    
+    toggleYawInversion() { this.userYawInv *= -1; }
+    togglePitchInversion() { this.userPitchInv *= -1; }
+
+    updateRaw(w, x, y, z) {
+        // Just store the latest target, don't slerp here yet
+        this.targetQuat.set(x, y, z, w).normalize();
+    }
+    
+    // Call this every frame in animate()
+    updateSmoothing() {
+        // Slerp towards the raw target based on smoothing factor
+        this.currentQuat.slerp(this.targetQuat, this.smoothing);
+    }
+
+    recenter() {
+        this.tareQuat.copy(this.currentQuat);
+    }
+
+    getGameQuaternion() {
+        const delta = new THREE.Quaternion().copy(this.tareQuat).invert().multiply(this.currentQuat);
+        const w = Math.max(-1, Math.min(1, delta.w));
+        const angle = 2 * Math.acos(w);
+        
+        if (Math.abs(angle) < 0.0001) return new THREE.Quaternion();
+
+        const s = Math.sqrt(1 - w*w);
+        const axis = new THREE.Vector3(delta.x, delta.y, delta.z).divideScalar(s);
+        
+        // 1. Raw Angles
+        let rawYaw = angle * axis.dot(this.yawAxis) * this.baseYawMult;
+        let rawPitch = angle * axis.dot(this.pitchAxis) * this.basePitchMult;
+
+        // 2. Inversion
+        rawYaw *= this.userYawInv;
+        rawPitch *= this.userPitchInv;
+
+        // 3. Map Range (-1 to 1)
+        let normYaw = this.mapRange(rawYaw, this.range.minYaw, this.range.maxYaw, -1, 1);
+        let normPitch = this.mapRange(rawPitch, this.range.minPitch, this.range.maxPitch, -1, 1);
+
+        this.saturation.yaw = normYaw;
+        this.saturation.pitch = normPitch;
+
+        // 4. Game FOV + SENSITIVITY
+        const gameYaw = normYaw * (GAME_MAX_FOV_YAW / 2) * this.sensitivity;
+        const gamePitch = normPitch * (GAME_MAX_FOV_PITCH / 2) * this.sensitivity;
+
+        const euler = new THREE.Euler(-gamePitch, -gameYaw, 0, 'YXZ');
+        return new THREE.Quaternion().setFromEuler(euler);
+    }
+
+    mapRange(val, inMin, inMax, outMin, outMax) {
+        const clampedVal = Math.max(inMin, Math.min(val, inMax));
+        return (clampedVal - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+    }
+}
+
+const solver = new IMUSolver();
+
+// =========================================================
+// 2. THREE.JS WORLD (EXPANDED)
+// =========================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x010103);
+// Fog: Starts at 100, ends at 1200 (Huge world feel)
+scene.fog = new THREE.Fog(0x010103, 100, 1200);
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000);
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
+document.body.appendChild(renderer.domElement);
+
+// LIGHTING
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0x00ffcc, 1.5);
+dirLight.position.set(0, 50, 0);
+scene.add(dirLight);
+
+// GIANT GRID
+const gridHelper = new THREE.GridHelper(1000, 100, 0x004444, 0x050505);
+gridHelper.position.y = -20; // Lower floor for scale
+scene.add(gridHelper);
+
+// DISTANT PILLARS
+const pillarGeo = new THREE.BoxGeometry(5, 200, 5);
+const pillarMat = new THREE.MeshBasicMaterial({ color: 0x002222, transparent: true, opacity: 0.5 });
+for(let i=0; i<50; i++) {
+    const mesh = new THREE.Mesh(pillarGeo, pillarMat);
+    const ang = Math.random() * Math.PI * 2;
+    const rad = 200 + Math.random() * 300; // Far out (200-500 units)
+    mesh.position.set(Math.sin(ang)*rad, 0, Math.cos(ang)*rad);
+    scene.add(mesh);
+}
+
+// TARGET SYSTEM
+const targets = [];
+const particles = [];
+
+function spawnTarget() {
+    // Bigger targets for further distance
+    const geo = new THREE.IcosahedronGeometry(4, 1); 
+    const mat = new THREE.MeshStandardMaterial({ 
+        color: 0xff0055, emissive: 0xff0055, emissiveIntensity: 1.0, roughness: 0.1, metalness: 0.8
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    
+    // SAFE SPAWN LOGIC (Expanded Distance)
+    const safeFactor = 0.85; // Keep away from edges
+    const maxGameYaw = (GAME_MAX_FOV_YAW / 2) * solver.sensitivity * safeFactor;
+    const maxGamePitch = (GAME_MAX_FOV_PITCH / 2) * solver.sensitivity * safeFactor;
+
+    // We restrict spawn to the "Default 1.0 Sens" FOV so targets are always reachable
+    // even if user turns sensitivity down.
+    const spawnYaw = (Math.random() - 0.5) * 2 * (GAME_MAX_FOV_YAW / 2) * 0.9;
+    const spawnPitch = (Math.random() - 0.5) * 2 * (GAME_MAX_FOV_PITCH / 2) * 0.9;
+    
+    const distance = 80; // Pushed way back (was 30)
+
+    const y = Math.sin(spawnPitch) * distance;
+    const hDist = Math.cos(spawnPitch) * distance; 
+    const x = Math.sin(spawnYaw) * hDist;
+    const z = -Math.cos(spawnYaw) * hDist;
+
+    mesh.position.set(x, y, z);
+    scene.add(mesh);
+    targets.push({ mesh: mesh, time: Math.random() * 100 });
+}
+
+function explodeTarget(pos) {
+    const pGeo = new THREE.BufferGeometry();
+    const count = 40;
+    const positions = new Float32Array(count * 3);
+    const velocities = [];
+    for(let i=0; i<count; i++) {
+        positions[i*3] = pos.x; positions[i*3+1] = pos.y; positions[i*3+2] = pos.z;
+        velocities.push(new THREE.Vector3((Math.random()-0.5)*2, (Math.random()-0.5)*2, (Math.random()-0.5)*2));
+    }
+    pGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const pMat = new THREE.PointsMaterial({ color: 0xffaa00, size: 0.8, transparent: true });
+    const pSystem = new THREE.Points(pGeo, pMat);
+    scene.add(pSystem);
+    particles.push({ mesh: pSystem, vels: velocities, life: 1.0 });
+}
+
+const raycaster = new THREE.Raycaster();
+const screenCenter = new THREE.Vector2(0, 0);
+let score = 0;
+let gameActive = false;
+
+window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') fireWeapon();
+    if (e.code === 'KeyR') solver.recenter(); 
+});
+window.addEventListener('mousedown', (e) => {
+    // Only fire if not clicking the UI
+    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') {
+        fireWeapon();
+    }
+});
+
+function fireWeapon() {
+    if (!gameActive) return;
+    raycaster.setFromCamera(screenCenter, camera);
+    const intersects = raycaster.intersectObjects(targets.map(t => t.mesh));
+    if (intersects.length > 0) {
+        const hitObj = intersects[0].object;
+        scene.remove(hitObj);
+        const index = targets.findIndex(t => t.mesh === hitObj);
+        if (index > -1) targets.splice(index, 1);
+        explodeTarget(hitObj.position);
+        score += 100;
+        document.getElementById('score-val').innerText = score;
+        spawnTarget();
+    }
+}
+
+function updateHUD() {
+    const yawP = solver.saturation.yaw * 50; 
+    const pitP = solver.saturation.pitch * 50;
+    const yBar = document.getElementById('sat-yaw');
+    yBar.style.left = (50 + Math.min(0, yawP)) + "%";
+    yBar.style.width = Math.abs(yawP) + "%";
+    const pBar = document.getElementById('sat-pitch');
+    pBar.style.left = (50 + Math.min(0, pitP)) + "%";
+    pBar.style.width = Math.abs(pitP) + "%";
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    
+    // Apply smoothing every frame
+    if (gameActive) {
+        solver.updateSmoothing();
+        const targetQ = solver.getGameQuaternion();
+        camera.quaternion.copy(targetQ); // Solver now handles the smoothing internally
+        updateHUD();
+    }
+
+    const time = Date.now() * 0.001;
+    targets.forEach(t => {
+        t.mesh.rotation.x += 0.01; t.mesh.rotation.y += 0.01;
+        t.mesh.position.y += Math.sin(time + t.time) * 0.05;
+    });
+
+    if (gameActive) {
+        raycaster.setFromCamera(screenCenter, camera);
+        if (raycaster.intersectObjects(targets.map(t => t.mesh)).length > 0) {
+            document.getElementById('crosshair').classList.add('locked');
+        } else {
+            document.getElementById('crosshair').classList.remove('locked');
+        }
+    }
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.life -= 0.03;
+        const positions = p.mesh.geometry.attributes.position.array;
+        for(let j=0; j<p.vels.length; j++) {
+            positions[j*3] += p.vels[j].x; positions[j*3+1] += p.vels[j].y; positions[j*3+2] += p.vels[j].z;
+        }
+        p.mesh.geometry.attributes.position.needsUpdate = true;
+        p.mesh.material.opacity = p.life;
+        if (p.life <= 0) { scene.remove(p.mesh); particles.splice(i, 1); }
+    }
+    renderer.render(scene, camera);
+}
+animate();
+spawnTarget(); spawnTarget(); spawnTarget();
+
+// =========================================================
+// 4. UI HANDLERS
+// =========================================================
+const btnLoad = document.getElementById('btn-load');
+const fileInput = document.getElementById('file-input');
+const btnConnect = document.getElementById('btn-connect');
+
+// BUTTONS
+const btnInvYaw = document.getElementById('ingame-inv-yaw');
+const btnInvPitch = document.getElementById('ingame-inv-pitch');
+const btnRecenter = document.getElementById('ingame-recenter');
+
+// SLIDERS
+const slideSens = document.getElementById('slider-sens');
+const lblSens = document.getElementById('lbl-sens');
+const slideSmooth = document.getElementById('slider-smooth');
+const lblSmooth = document.getElementById('lbl-smooth');
+
+// Slider Events
+slideSens.oninput = (e) => {
+    const val = parseFloat(e.target.value);
+    solver.sensitivity = val;
+    lblSens.innerText = val.toFixed(1) + "x";
+};
+
+slideSmooth.oninput = (e) => {
+    const val = parseFloat(e.target.value);
+    solver.smoothing = val;
+    lblSmooth.innerText = val.toFixed(2);
+};
+
+btnInvYaw.onclick = () => {
+    solver.toggleYawInversion();
+    btnInvYaw.classList.toggle('active');
+};
+btnInvPitch.onclick = () => {
+    solver.togglePitchInversion();
+    btnInvPitch.classList.toggle('active');
+};
+btnRecenter.onclick = () => solver.recenter();
+
+btnLoad.onclick = () => fileInput.click();
+fileInput.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = (ev) => {
+        try {
+            const json = JSON.parse(ev.target.result);
+            solver.loadProfile(json);
+            btnLoad.innerText = "PROFILE LOADED";
+            btnLoad.style.borderColor = "#00ffcc";
+            btnConnect.disabled = false;
+        } catch(err) { alert("Invalid JSON"); }
+    };
+    r.readAsText(file);
+};
+
+btnConnect.onclick = async () => {
+    if ('serial' in navigator) {
+        try {
+            const port = await navigator.serial.requestPort();
+            await port.open({ baudRate: 115200 });
+            keepReading = true;
+            readSerial(port);
+            document.getElementById('start-menu').style.display = 'none';
+            document.getElementById('menu-overlay').style.display = 'none';
+            gameActive = true;
+            solver.recenter();
+        } catch (err) { alert("Connection Error: " + err); }
+    }
+};
+
+let keepReading = false;
+async function readSerial(port) {
+    const decoder = new TextDecoderStream();
+    port.readable.pipeTo(decoder.writable);
+    const reader = decoder.readable.getReader();
+    let buffer = "";
+    while(keepReading) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+            try {
+                const json = JSON.parse(line);
+                if (json.type === "imu" && json.quat) {
+                    solver.updateRaw(json.quat[0], json.quat[1], json.quat[2], json.quat[3]);
+                }
+            } catch(e) {}
+        }
+    }
+}
+window.onresize = () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+};
+</script>
+</body>
+</html>

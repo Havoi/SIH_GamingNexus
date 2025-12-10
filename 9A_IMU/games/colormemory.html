@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Zen Garden | Aligned</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background: #1a1a2e; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+
+        /* UI LAYER */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
+
+        /* HEADER */
+        #header {
+            padding: 30px;
+            display: flex; justify-content: space-between; align-items: flex-start;
+            color: #e0e0ff; text-shadow: 0 0 15px rgba(200, 220, 255, 0.5);
+        }
+        .stat-val { font-size: 40px; font-weight: 300; letter-spacing: 2px; }
+        .stat-label { font-size: 12px; text-transform: uppercase; letter-spacing: 3px; opacity: 0.7; }
+        
+        #game-status {
+            position: absolute; top: 15%; left: 50%; transform: translateX(-50%);
+            font-size: 24px; color: #fff; text-shadow: 0 0 20px rgba(255,255,255,0.6);
+            opacity: 0; transition: opacity 0.5s; text-align: center;
+        }
+
+        /* RETICLE */
+        #reticle {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 40px; height: 40px; border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 50%; pointer-events: none; transition: transform 0.2s, border-color 0.2s;
+        }
+        #reticle.active { transform: translate(-50%, -50%) scale(1.5); border-color: #fff; border-width: 2px; }
+
+        /* MENU PANELS */
+        #menu-container {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 100%; display: flex; justify-content: center; pointer-events: auto; z-index: 10;
+        }
+        .panel {
+            background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.2); padding: 40px 60px;
+            border-radius: 30px; text-align: center; color: #fff;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.3); max-width: 500px;
+            display: none; animation: floatUp 0.5s ease-out;
+        }
+        .panel.active { display: block; }
+        @keyframes floatUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+
+        h2 { font-weight: 300; letter-spacing: 2px; margin-bottom: 10px; }
+        p { font-size: 14px; opacity: 0.8; margin-bottom: 30px; line-height: 1.6; }
+
+        /* BUTTONS */
+        button {
+            background: linear-gradient(135deg, rgba(255,255,255,0.2), rgba(255,255,255,0.05));
+            border: 1px solid rgba(255,255,255,0.4); color: white;
+            padding: 12px 30px; font-size: 14px; border-radius: 50px;
+            cursor: pointer; transition: 0.3s; margin: 5px; text-transform: uppercase; letter-spacing: 1px;
+        }
+        button:hover { background: rgba(255,255,255,0.3); transform: translateY(-2px); box-shadow: 0 5px 15px rgba(255,255,255,0.2); }
+        button:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+        /* CONTROLS BAR */
+        #controls-bar {
+            padding: 30px; background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);
+            pointer-events: auto; color: white; display: flex; gap: 30px; align-items: flex-end;
+        }
+        
+        .control-group { display: flex; flex-direction: column; gap: 8px; }
+        label { font-size: 10px; font-weight: 600; letter-spacing: 1px; color: #aaccff; }
+        
+        input[type="range"] {
+            -webkit-appearance: none; width: 100px; height: 4px; background: rgba(255,255,255,0.2);
+            border-radius: 2px; outline: none; cursor: pointer;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
+            background: #fff; cursor: pointer; transition: transform 0.1s;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
+        .toggle-btn { font-size: 10px; padding: 8px 16px; border-radius: 8px; }
+        .toggle-btn.active { background: rgba(100, 255, 200, 0.2); border-color: #64ffc8; color: #64ffc8; }
+        .toggle-btn.inverted { background: rgba(255, 100, 100, 0.2); border-color: #ff6464; color: #ff6464; }
+
+        .sat-wrapper { width: 140px; margin-right: 20px; border-right: 1px solid rgba(255,255,255,0.1); padding-right: 30px; }
+        .sat-track { width: 100%; height: 4px; background: rgba(255,255,255,0.1); margin-top: 5px; border-radius: 2px; position: relative; }
+        .sat-fill { width: 0%; height: 100%; background: #aaccff; position: absolute; left: 50%; border-radius: 2px; transition: width 0.1s; box-shadow: 0 0 10px #aaccff; }
+
+        input[type="file"] { display: none; }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+</head>
+<body>
+
+<div id="game-container"></div>
+
+<div id="ui-layer">
+    <div id="header">
+        <div>
+            <div class="stat-label">Harmony</div>
+            <div class="stat-val" id="score-val">0</div>
+        </div>
+        <div style="text-align: right">
+            <div class="stat-val" id="round-val">1</div>
+            <div class="stat-label">Cycle</div>
+        </div>
+    </div>
+
+    <div id="game-status">Watch the Sequence</div>
+    <div id="reticle"></div>
+
+    <div id="menu-container">
+        <div id="screen-connect" class="panel active">
+            <h2>Zen Garden</h2>
+            <button id="btn-connect">Connect Sensor</button>
+        </div>
+
+        <div id="screen-load" class="panel">
+            <h2>Balance Your Range</h2>
+            <p>Load your calibration profile.</p>
+            <button id="btn-load-file">Load Profile</button>
+            <input type="file" id="file-input" accept=".json">
+        </div>
+
+        <div id="screen-ready" class="panel">
+            <h2>Breathe & Begin</h2>
+            <p>Look left and right only.<br>Spacebar to select.</p>
+            <button id="btn-start">Begin Session</button>
+        </div>
+    </div>
+
+    <div id="controls-bar">
+        <div class="sat-wrapper">
+            <label>Yaw Range</label>
+            <div class="sat-track"><div id="sat-yaw" class="sat-fill"></div></div>
+        </div>
+
+        <div class="control-group">
+            <label>Sensitivity</label>
+            <input type="range" id="input-sens" min="0.5" max="3.0" step="0.1" value="1.0">
+        </div>
+        <div class="control-group">
+            <label>Smoothing</label>
+            <input type="range" id="input-smooth" min="0.05" max="0.5" step="0.01" value="0.15">
+        </div>
+
+        <div class="control-group">
+            <button id="btn-inv-yaw" class="toggle-btn active">Yaw: Norm</button>
+        </div>
+
+        <button id="btn-recenter" style="margin-left: auto;">Center View</button>
+    </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+// =========================================================
+// 1. RANGE ADAPTIVE SOLVER (YAW ONLY)
+// =========================================================
+class RangeAdaptiveSolver {
+    constructor() {
+        this.yawAxis = new THREE.Vector3(0, 1, 0);
+        this.pitchAxis = new THREE.Vector3(1, 0, 0);
+        this.baseYawMult = 1.0;
+        this.userYawInv = 1.0;
+        
+        this.sensitivity = 1.0;
+        this.smoothing = 0.15; 
+
+        this.range = { minYaw: -0.5, maxYaw: 0.5 };
+        
+        this.tareQuat = new THREE.Quaternion();
+        this.currentQuat = new THREE.Quaternion();
+        this.targetQuat = new THREE.Quaternion();
+        this.saturation = 0;
+    }
+
+    loadProfile(json) {
+        this.yawAxis.set(json.yawAxis.x, json.yawAxis.y, json.yawAxis.z);
+        this.pitchAxis.set(json.pitchAxis.x, json.pitchAxis.y, json.pitchAxis.z);
+        this.baseYawMult = json.yawMultiplier || 1.0;
+        if (json.range) this.range = json.range;
+    }
+    
+    toggleYaw() { this.userYawInv *= -1; return this.userYawInv === 1; }
+
+    updateRaw(w, x, y, z) {
+        this.targetQuat.set(x, y, z, w).normalize();
+    }
+    
+    updateSmoothing() {
+        this.currentQuat.slerp(this.targetQuat, this.smoothing);
+    }
+
+    recenter() {
+        this.tareQuat.copy(this.currentQuat);
+    }
+
+    getInput() {
+        const delta = new THREE.Quaternion().copy(this.tareQuat).invert().multiply(this.currentQuat);
+        const w = Math.max(-1, Math.min(1, delta.w));
+        const angle = 2 * Math.acos(w);
+        
+        if (Math.abs(angle) < 0.0001) return 0;
+
+        const s = Math.sqrt(1 - w*w);
+        const axis = new THREE.Vector3(delta.x, delta.y, delta.z).divideScalar(s);
+        
+        let rawYaw = angle * axis.dot(this.yawAxis) * this.baseYawMult * this.userYawInv;
+        let normYaw = this.mapRange(rawYaw, this.range.minYaw, this.range.maxYaw, -1, 1);
+
+        this.saturation = normYaw;
+
+        return -normYaw * this.sensitivity;
+    }
+
+    mapRange(val, inMin, inMax, outMin, outMax) {
+        const clampedVal = Math.max(inMin, Math.min(val, inMax));
+        return (clampedVal - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+    }
+}
+
+const solver = new RangeAdaptiveSolver();
+
+// =========================================================
+// 2. ZEN GARDEN VISUALS
+// =========================================================
+const scene = new THREE.Scene();
+const skyColor = new THREE.Color(0x1a1a2e);
+const fogColor = new THREE.Color(0x2a2a4e);
+scene.background = skyColor;
+scene.fog = new THREE.FogExp2(fogColor, 0.035);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+// Camera at height 1.5
+camera.position.set(0, 1.5, 0); 
+
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ReinhardToneMapping;
+document.getElementById('game-container').appendChild(renderer.domElement);
+
+const composer = new EffectComposer(renderer);
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
+
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+bloomPass.threshold = 0.7; 
+bloomPass.strength = 1.2; 
+bloomPass.radius = 0.8;
+composer.addPass(bloomPass);
+
+// LIGHTS
+const ambLight = new THREE.AmbientLight(0x404060, 2.0);
+scene.add(ambLight);
+
+for(let i=0; i<3; i++) {
+    const pl = new THREE.PointLight(0x88ccff, 0.5, 20);
+    pl.position.set(Math.random()*10-5, 2, Math.random()*10-5);
+    scene.add(pl);
+}
+
+// GROUND
+const planeGeo = new THREE.PlaneGeometry(100, 100, 64, 64);
+const planeMat = new THREE.MeshPhysicalMaterial({ 
+    color: 0x111122, roughness: 0.1, metalness: 0.8, 
+    transparent: true, opacity: 0.8 
+});
+const ground = new THREE.Mesh(planeGeo, planeMat);
+ground.rotation.x = -Math.PI/2;
+ground.position.y = -2;
+scene.add(ground);
+
+// PARTICLES
+const partGeo = new THREE.BufferGeometry();
+const partCount = 400;
+const posArray = new Float32Array(partCount * 3);
+for(let i=0; i<partCount*3; i++) {
+    posArray[i] = (Math.random() - 0.5) * 40;
+}
+partGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+const partMat = new THREE.PointsMaterial({
+    size: 0.08, color: 0xffffaa, transparent: true, opacity: 0.8,
+    blending: THREE.AdditiveBlending
+});
+const fireflies = new THREE.Points(partGeo, partMat);
+scene.add(fireflies);
+
+// CRYSTALS (CLUSTERED FOR NARROW FOV + HEIGHT FIXED)
+const crystals = [];
+const crystalGeo = new THREE.IcosahedronGeometry(0.6, 0); 
+const crystalMatBase = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff, transmission: 0.5, opacity: 0.8, roughness: 0.1, metalness: 0.1,
+    emissive: 0x000000, emissiveIntensity: 1.0
+});
+
+const CRYSTAL_COUNT = 5;
+const RADIUS = 8;
+const ARC = Math.PI * 0.25; // 45 Degrees
+
+for(let i=0; i<CRYSTAL_COUNT; i++) {
+    const angle = -ARC/2 + (i / (CRYSTAL_COUNT-1)) * ARC;
+    const x = Math.sin(angle) * RADIUS;
+    const z = -Math.cos(angle) * RADIUS;
+    
+    const mesh = new THREE.Mesh(crystalGeo, crystalMatBase.clone());
+    
+    // FIX: Base height is 1.5 to match Camera Y
+    const baseHeight = 1.5;
+    mesh.position.set(x, baseHeight, z);
+    
+    mesh.userData = { 
+        baseY: baseHeight, 
+        timeOffset: Math.random() * 100,
+        originalColor: new THREE.Color().setHSL(i/CRYSTAL_COUNT, 0.7, 0.1),
+        glowColor: new THREE.Color().setHSL(i/CRYSTAL_COUNT, 0.9, 0.5),
+        id: i
+    };
+    
+    mesh.material.color.copy(mesh.userData.originalColor);
+    mesh.material.emissive.copy(mesh.userData.originalColor);
+    
+    const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.8, 0.02, 16, 32),
+        new THREE.MeshBasicMaterial({ color: mesh.userData.glowColor, transparent:true, opacity:0.3 })
+    );
+    ring.rotation.x = Math.PI/2;
+    mesh.add(ring);
+
+    scene.add(mesh);
+    crystals.push(mesh);
+}
+
+// =========================================================
+// 3. GAME LOGIC
+// =========================================================
+let gameState = "SETUP";
+let sequence = [];
+let playerStep = 0;
+let round = 1;
+const raycaster = new THREE.Raycaster();
+const center = new THREE.Vector2(0,0);
+
+const statusEl = document.getElementById('game-status');
+const reticleEl = document.getElementById('reticle');
+
+function startRound() {
+    gameState = "WATCH";
+    playerStep = 0;
+    sequence.push(Math.floor(Math.random() * CRYSTAL_COUNT));
+    
+    statusEl.style.opacity = 1;
+    statusEl.innerText = `Round ${round}: Watch`;
+    document.getElementById('round-val').innerText = round;
+    
+    playSequence();
+}
+
+function playSequence() {
+    let delay = 1000;
+    sequence.forEach((crystalIdx, i) => {
+        setTimeout(() => {
+            activateCrystal(crystalIdx, 600);
+        }, delay);
+        delay += 1000;
+    });
+    
+    setTimeout(() => {
+        gameState = "INPUT";
+        statusEl.innerText = "Repeat the Pattern";
+    }, delay);
+}
+
+function activateCrystal(idx, duration) {
+    const mesh = crystals[idx];
+    mesh.material.emissive.copy(mesh.userData.glowColor);
+    mesh.material.color.setHex(0xffffff);
+    mesh.scale.setScalar(1.2);
+    
+    setTimeout(() => {
+        mesh.material.emissive.copy(mesh.userData.originalColor);
+        mesh.material.color.copy(mesh.userData.originalColor);
+        mesh.scale.setScalar(1.0);
+    }, duration);
+}
+
+function handleInput() {
+    raycaster.setFromCamera(center, camera);
+    const intersects = raycaster.intersectObjects(crystals);
+    
+    if (intersects.length > 0) {
+        const hitObj = intersects[0].object;
+        const idx = hitObj.userData.id;
+        
+        activateCrystal(idx, 300);
+        
+        if (idx === sequence[playerStep]) {
+            playerStep++;
+            document.getElementById('score-val').innerText = (round-1) * 10 + playerStep;
+            
+            if (playerStep >= sequence.length) {
+                gameState = "WAIT";
+                statusEl.innerText = "Harmony Achieved";
+                round++;
+                setTimeout(startRound, 1500);
+            }
+        } else {
+            statusEl.innerText = "Focus Broken. Resetting...";
+            statusEl.style.color = "#ff8888";
+            sequence = [];
+            round = 1;
+            setTimeout(() => {
+                statusEl.style.color = "#fff";
+                startRound();
+            }, 2000);
+        }
+    }
+}
+
+// UPDATE LOOP
+function animate() {
+    requestAnimationFrame(animate);
+    
+    solver.updateSmoothing();
+    const yawInput = solver.getInput(); 
+    
+    // CAMERA
+    const MAX_YAW_DEG = 45; 
+    camera.rotation.y = yawInput * (MAX_YAW_DEG * (Math.PI/180));
+    camera.rotation.x = 0; 
+    
+    // UI Bar
+    const yawP = solver.saturation * 50; 
+    document.getElementById('sat-yaw').style.left = (50 + Math.min(0, yawP)) + "%";
+    document.getElementById('sat-yaw').style.width = Math.abs(yawP) + "%";
+
+    const time = Date.now() * 0.001;
+    fireflies.rotation.y = time * 0.05;
+    
+    // FIX: Float around the Base Y (1.5)
+    crystals.forEach(c => {
+        c.position.y = c.userData.baseY + Math.sin(time * 2 + c.userData.timeOffset) * 0.2;
+        c.rotation.y += 0.01;
+        c.rotation.z = Math.sin(time + c.userData.timeOffset) * 0.1;
+    });
+
+    raycaster.setFromCamera(center, camera);
+    const intersects = raycaster.intersectObjects(crystals);
+    if(intersects.length > 0) {
+        reticleEl.classList.add('active');
+    } else {
+        reticleEl.classList.remove('active');
+    }
+
+    composer.render();
+}
+animate();
+
+// =========================================================
+// 4. UI HANDLERS
+// =========================================================
+let port, keepReading = false;
+const screens = ['screen-connect', 'screen-load', 'screen-ready'];
+
+function switchScreen(id) {
+    screens.forEach(s => document.getElementById(s).classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+}
+
+document.getElementById('btn-connect').onclick = async () => {
+    try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        keepReading = true;
+        readLoop();
+        switchScreen('screen-load');
+    } catch (e) { alert("Connection Error"); }
+};
+
+document.getElementById('btn-load-file').onclick = () => document.getElementById('file-input').click();
+document.getElementById('file-input').onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+        try {
+            solver.loadProfile(JSON.parse(evt.target.result));
+            switchScreen('screen-ready');
+        } catch (err) { alert("Invalid File"); }
+    };
+    reader.readAsText(file);
+};
+
+document.getElementById('btn-start').onclick = () => {
+    solver.recenter();
+    document.getElementById('menu-container').style.display = "none";
+    startRound();
+};
+
+window.addEventListener('keydown', (e) => {
+    if(e.code === 'Space') {
+        if(gameState === "INPUT") handleInput();
+        else solver.recenter(); 
+    }
+    if(e.code === 'KeyR') solver.recenter();
+    if(e.code === 'Escape') {
+        const m = document.getElementById('menu-container');
+        m.style.display = (m.style.display === 'none') ? 'flex' : 'none';
+    }
+});
+
+const btnInvYaw = document.getElementById('btn-inv-yaw');
+btnInvYaw.onclick = () => {
+    const norm = solver.toggleYaw();
+    btnInvYaw.innerText = norm ? "Yaw: Norm" : "Yaw: INV";
+    btnInvYaw.className = norm ? "toggle-btn active" : "toggle-btn inverted";
+};
+
+document.getElementById('input-sens').oninput = (e) => {
+    solver.sensitivity = parseFloat(e.target.value);
+};
+document.getElementById('input-smooth').oninput = (e) => {
+    solver.smoothing = parseFloat(e.target.value);
+};
+document.getElementById('btn-recenter').onclick = () => solver.recenter();
+
+async function readLoop() {
+    const textDecoder = new TextDecoderStream();
+    port.readable.pipeTo(textDecoder.writable);
+    const reader = textDecoder.readable.getReader();
+    let buffer = "";
+    while (keepReading) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+            try {
+                const json = JSON.parse(line);
+                if (json.type === "imu" && json.quat) solver.updateRaw(...json.quat);
+            } catch (e) {}
+        }
+    }
+}
+window.onresize = () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
+};
+</script>
+</body>
+</html>

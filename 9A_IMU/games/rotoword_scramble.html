@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RotoWord: Fixed & Invertible</title>
+    <style>
+        @font-face {
+            font-family: "OpenDyslexic";
+            src: url("https://ant-media.net/opendyslexic-webfont/OpenDyslexic-Regular.woff2") format("woff2");
+        }
+        :root {
+            --bg-color: #050505;
+            --main-color: #00ffaa; 
+            --focus-color: #ffaa00; 
+            --success-color: #00ff00;
+            --font-main: "OpenDyslexic", "Consolas", monospace;
+            
+            --bg-image-url: url("https://picsum.photos/1920/1080?grayscale&blur=2");
+            --overlay-color: rgba(5, 5, 10, 0.94);
+        }
+
+        body {
+            margin: 0;
+            color: var(--main-color);
+            font-family: var(--font-main);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background-image: var(--bg-image-url);
+            background-size: cover;
+            background-color: var(--overlay-color);
+            background-blend-mode: multiply;
+            user-select: none;
+        }
+
+        /* HUD */
+        #hud {
+            position: absolute; top: 15px; left: 20px;
+            padding: 15px; border-radius: 8px;
+            font-size: 14px; background: rgba(0, 0, 0, 0.8);
+            border-left: 4px solid var(--main-color);
+            z-index: 200;
+        }
+        #status-display { color: var(--focus-color); font-weight: bold; margin-bottom: 5px; }
+        
+        .sat-bar-container {
+            width: 150px; height: 6px; background: #333; margin-top: 8px; border-radius: 3px; position: relative; overflow: hidden;
+        }
+        .sat-bar {
+            height: 100%; width: 0%; background: var(--focus-color); position: absolute; left: 50%; transition: width 0.1s, left 0.1s;
+        }
+
+        /* GAME BOARD */
+        #game-board {
+            width: 90%; max-width: 1000px; height: 500px;
+            border: 2px solid var(--main-color);
+            box-shadow: 0 0 30px rgba(0, 255, 170, 0.1);
+            position: relative;
+            background: rgba(0, 0, 0, 0.6);
+            border-radius: 12px;
+            backdrop-filter: blur(5px);
+        }
+
+        /* LETTERS */
+        #scrambled-letters {
+            position: absolute; top: 60px; width: 100%; text-align: center;
+            display: flex; justify-content: center; gap: 20px; flex-wrap: wrap;
+        }
+        .scrambled-char {
+            font-size: 2.5rem; padding: 15px 25px; 
+            border: 1px solid rgba(0,255,170,0.3); border-radius: 12px;
+            background: rgba(0,0,0,0.5); cursor: crosshair;
+            transition: all 0.2s;
+        }
+        .scrambled-char.hovered { border-color: #fff; transform: scale(1.1); }
+        .scrambled-char.selected {
+            color: #000; background: var(--focus-color); border-color: var(--focus-color);
+            transform: scale(1.2); box-shadow: 0 0 25px var(--focus-color);
+        }
+        .scrambled-char.used { opacity: 0; pointer-events: none; }
+
+        /* TARGETS */
+        #target-sentence {
+            position: absolute; bottom: 80px; width: 100%; text-align: center;
+            display: flex; justify-content: center; gap: 15px;
+        }
+        .target-char {
+            font-size: 2.5rem; min-width: 1.2em; height: 1.5em; text-align: center;
+            border-bottom: 4px solid rgba(255, 255, 255, 0.2);
+            color: #555;
+        }
+        .target-char.hovered { border-bottom-color: #fff; }
+        .target-char.filled {
+            border-bottom: 4px solid var(--success-color); color: var(--success-color);
+        }
+
+        /* CURSOR WITH SVG RING */
+        #imu-cursor {
+            position: absolute; width: 50px; height: 50px; 
+            pointer-events: none; z-index: 100;
+            transform: translate(-50%, -50%);
+        }
+        /* The SVG Ring */
+        .progress-ring__circle {
+            transition: 0.1s stroke-dashoffset;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+
+        /* SCREENS */
+        .full-screen-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.95); z-index: 300;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            text-align: center;
+        }
+        .hidden { display: none !important; }
+
+        /* CONTROLS BAR */
+        #controls {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            background: rgba(0,20,10, 0.9); padding: 15px;
+            display: flex; justify-content: center; gap: 15px; z-index: 200;
+            border-top: 1px solid var(--main-color);
+        }
+        
+        button {
+            background: #002211; color: var(--main-color);
+            border: 1px solid var(--main-color); padding: 10px 20px;
+            font-family: inherit; font-size: 12px; font-weight: bold;
+            cursor: pointer; text-transform: uppercase; border-radius: 4px;
+        }
+        button:hover { background: var(--main-color); color: #000; }
+        button.active { background: #fff; color: #000; border-color: #fff; }
+        button:disabled { border-color: #444; color: #444; background: transparent; cursor: default; }
+
+    </style>
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+</head>
+<body>
+
+    <div id="intro-screen" class="full-screen-overlay">
+        <h1 style="color:var(--main-color);">ROTO-WORD REPAIR</h1>
+        <p style="color:#ccc; max-width:500px; margin-bottom:20px;">Use your head/limb movement to grab floating letters and place them in the correct slots.</p>
+        <button id="btn-setup" style="font-size:16px;">ENTER SYSTEM</button>
+    </div>
+
+    <div id="hud" class="hidden">
+        <div id="status-display">SYSTEM STANDBY</div>
+        <div style="margin-top:10px; font-size:10px; color:#aaa;">YAW LIMIT</div>
+        <div class="sat-bar-container"><div id="sat-bar-x" class="sat-bar"></div></div> 
+        <div style="margin-top:2px; font-size:10px; color:#aaa;">PITCH LIMIT</div>
+        <div class="sat-bar-container"><div id="sat-bar-y" class="sat-bar"></div></div> 
+    </div>
+
+    <div id="game-board" class="hidden">
+        <div id="scrambled-letters"></div>
+        <div id="target-sentence"></div>
+        
+        <div id="imu-cursor">
+            <svg class="progress-ring" width="50" height="50">
+                <circle class="progress-ring__circle" stroke="white" stroke-width="4" fill="transparent" r="20" cx="25" cy="25"/>
+            </svg>
+            <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:6px; height:6px; background:#00ffaa; border-radius:50%;"></div>
+        </div>
+    </div>
+
+    <div id="win-screen" class="hidden full-screen-overlay">
+        <h1 style="color: var(--success-color);">SEQUENCE FIXED</h1>
+        <p id="completed-word" style="font-size:2rem; color:white;"></p>
+        <button id="btn-next-round">NEXT LEVEL</button>
+    </div>
+
+    <div id="controls" class="hidden">
+        <button id="btn-connect">1. Connect</button>
+        <button id="btn-load-cal">2. Load Range</button>
+        <input type="file" id="file-input" accept=".json" style="display: none">
+        
+        <div style="width:1px; background:#444; margin:0 10px;"></div>
+        
+        <button id="btn-inv-yaw">Invert Yaw</button>
+        <button id="btn-inv-pitch">Invert Pitch</button>
+        <button id="btn-recenter">Recenter (Space)</button>
+        
+        <div style="width:1px; background:#444; margin:0 10px;"></div>
+        
+        <button id="btn-start-game" disabled style="border-color:var(--focus-color); color:var(--focus-color);">START</button>
+    </div>
+
+<script type="module">
+import * as THREE from "three";
+
+// =========================================================
+// 1. RANGE ADAPTIVE SOLVER (Updated with Invert logic)
+// =========================================================
+class RangeAdaptiveSolver {
+    constructor() {
+        this.yawAxis = new THREE.Vector3(0, 1, 0);
+        this.pitchAxis = new THREE.Vector3(1, 0, 0);
+        this.tareQuat = new THREE.Quaternion();
+        this.currentQuat = new THREE.Quaternion();
+        this.targetQuat = new THREE.Quaternion(); 
+        
+        // Settings
+        this.range = { minYaw: -0.5, maxYaw: 0.5, minPitch: -0.5, maxPitch: 0.5 };
+        this.smoothing = 0.15; 
+        this.saturation = { x: 0, y: 0 };
+        this.isCalibrated = false;
+        
+        // Inversion Flags
+        this.invYaw = 1;
+        this.invPitch = 1;
+    }
+
+    processStream(w, x, y, z) {
+        this.targetQuat.set(x, y, z, w).normalize();
+    }
+
+    updateSmoothing() {
+        this.currentQuat.slerp(this.targetQuat, this.smoothing);
+    }
+
+    recenter() {
+        this.tareQuat.copy(this.currentQuat);
+    }
+
+    toggleYaw() { this.invYaw *= -1; return this.invYaw === -1; }
+    togglePitch() { this.invPitch *= -1; return this.invPitch === -1; }
+
+    getCursorPosition() {
+        if (!this.isCalibrated) return { x: 0.5, y: 0.5 };
+
+        const delta = new THREE.Quaternion().copy(this.tareQuat).invert().multiply(this.currentQuat);
+        const w = Math.max(-1, Math.min(1, delta.w));
+        const angle = 2 * Math.acos(w);
+
+        if (Math.abs(angle) < 0.001) return { x: 0.5, y: 0.5 };
+
+        const s = Math.sqrt(1 - w*w);
+        const axis = new THREE.Vector3(delta.x, delta.y, delta.z).divideScalar(s);
+
+        let yaw = angle * axis.dot(this.yawAxis);
+        let pitch = angle * axis.dot(this.pitchAxis);
+
+        // Apply Inversion BEFORE mapping range
+        // Note: Standard IMU yaw often needs inversion to feel like a cursor (left look = left move)
+        // So we default multiply by -1 for screen mapping, then apply user toggle.
+        yaw *= (-1 * this.invYaw); 
+        pitch *= (1 * this.invPitch);
+
+        // Map Range (-1 to 1)
+        let normX = this.mapRange(yaw, this.range.minYaw, this.range.maxYaw, -1, 1);
+        let normY = this.mapRange(pitch, this.range.minPitch, this.range.maxPitch, -1, 1);
+
+        this.saturation.x = normX;
+        this.saturation.y = normY;
+
+        // Convert to 0-1 Screen Space
+        return {
+            x: (normX + 1) / 2, 
+            y: (normY + 1) / 2
+        };
+    }
+
+    mapRange(val, inMin, inMax, outMin, outMax) {
+        // Clamp input to stay within user's physical limits
+        const clampedVal = Math.max(inMin, Math.min(val, inMax));
+        return (clampedVal - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+    }
+
+    loadProfile(json) {
+        this.yawAxis.set(json.yawAxis.x, json.yawAxis.y, json.yawAxis.z);
+        this.pitchAxis.set(json.pitchAxis.x, json.pitchAxis.y, json.pitchAxis.z);
+        if (json.range) this.range = json.range;
+        this.isCalibrated = true;
+    }
+}
+const solver = new RangeAdaptiveSolver();
+
+// =========================================================
+// 2. GAME LOGIC
+// =========================================================
+const LEVELS = ["CAT", "DOG", "FISH", "BIRD", "ROBOT", "NEURAL", "SYSTEM", "RECOVERY"];
+let currentLevel = 0;
+let currentWord = "";
+let selectedChar = null; // { el, char, idx }
+
+// Sticky Hold Logic
+let holdTimer = 0;
+const HOLD_TIME = 0.5; // seconds to hold
+let lockingTarget = null; // The element we are currently looking at
+
+// DOM
+const domScrambled = document.getElementById("scrambled-letters");
+const domTarget = document.getElementById("target-sentence");
+const cursor = document.getElementById("imu-cursor");
+const ringCircle = document.querySelector('.progress-ring__circle');
+const statusText = document.getElementById("status-display");
+
+// Setup SVG Ring
+const radius = ringCircle.r.baseVal.value;
+const circumference = radius * 2 * Math.PI;
+ringCircle.style.strokeDasharray = `${circumference} ${circumference}`;
+ringCircle.style.strokeDashoffset = circumference;
+
+function setProgress(percent) {
+    const offset = circumference - (percent / 100) * circumference;
+    ringCircle.style.strokeDashoffset = offset;
+}
+
+function scrambleText(text) {
+    let arr = text.split('');
+    // Simple shuffle
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+
+function startLevel() {
+    currentWord = LEVELS[currentLevel];
+    selectedChar = null;
+    holdTimer = 0;
+    lockingTarget = null;
+    setProgress(0);
+
+    // Render Scrambled
+    const scrambled = scrambleText(currentWord);
+    domScrambled.innerHTML = scrambled.map((char, i) => 
+        `<div class="scrambled-char" data-char="${char}" data-idx="${i}">${char}</div>`
+    ).join('');
+
+    // Render Target Slots
+    domTarget.innerHTML = currentWord.split('').map((_, i) => 
+        `<div class="target-char" data-idx="${i}">_</div>`
+    ).join('');
+
+    statusText.innerText = `LEVEL ${currentLevel + 1}: Assemble "${currentWord}"`;
+}
+
+// -------------------------------------------------------------
+// MAIN UPDATE LOOP
+// -------------------------------------------------------------
+function updateGame(dt) {
+    // 1. Solver & Cursor Position
+    solver.updateSmoothing();
+    const pos = solver.getCursorPosition();
+    
+    const board = document.getElementById('game-board');
+    const rect = board.getBoundingClientRect();
+    
+    const cx = pos.x * rect.width;
+    const cy = pos.y * rect.height;
+
+    cursor.style.left = cx + "px";
+    cursor.style.top = cy + "px";
+
+    // 2. Saturation Bars
+    const sx = solver.saturation.x * 50; 
+    const sy = solver.saturation.y * 50;
+    document.getElementById('sat-bar-x').style.left = (50 + Math.min(0, sx)) + "%";
+    document.getElementById('sat-bar-x').style.width = Math.abs(sx) + "%";
+    document.getElementById('sat-bar-y').style.left = (50 + Math.min(0, sy)) + "%";
+    document.getElementById('sat-bar-y').style.width = Math.abs(sy) + "%";
+
+    // 3. Collision / Sticky Logic
+    let hit = null;
+    let type = null;
+
+    // Check Scrambled Letters (Source)
+    const sources = Array.from(document.querySelectorAll('.scrambled-char:not(.used)'));
+    hit = checkCollision(cx, cy, rect, sources);
+    if(hit) type = 'source';
+
+    // Check Targets (Dest) if holding something
+    if (!hit && selectedChar) {
+        const dests = Array.from(document.querySelectorAll('.target-char:not(.filled)'));
+        hit = checkCollision(cx, cy, rect, dests);
+        if(hit) type = 'dest';
+    }
+
+    // 4. Timer Logic
+    if (hit) {
+        // If switching targets, reset timer
+        if (hit !== lockingTarget) {
+            lockingTarget = hit;
+            holdTimer = 0;
+            // Visual feedback on hover
+            document.querySelectorAll('.hovered').forEach(el => el.classList.remove('hovered'));
+            hit.classList.add('hovered');
+        }
+
+        holdTimer += dt;
+        const pct = Math.min(100, (holdTimer / HOLD_TIME) * 100);
+        setProgress(pct);
+
+        if (holdTimer >= HOLD_TIME) {
+            // ACTION TRIGGERED
+            performAction(hit, type);
+            // Reset
+            holdTimer = 0;
+            setProgress(0);
+            lockingTarget = null; // Force re-lock to prevent double clicks
+        }
+    } else {
+        // Lost target
+        lockingTarget = null;
+        holdTimer = Math.max(0, holdTimer - dt * 2); // Decay timer fast but smooth
+        setProgress((holdTimer / HOLD_TIME) * 100);
+        document.querySelectorAll('.hovered').forEach(el => el.classList.remove('hovered'));
+    }
+}
+
+// Simple Circle-Rect Collision for generous hit detection
+function checkCollision(cx, cy, boardRect, elements) {
+    // cx, cy are relative to board
+    // We add a "magnet radius" to the cursor for easier grabbing
+    const magnetRadius = 30; 
+
+    for(let el of elements) {
+        const r = el.getBoundingClientRect();
+        // Convert el rect to board space
+        const elL = r.left - boardRect.left;
+        const elT = r.top - boardRect.top;
+        const elR = elL + r.width;
+        const elB = elT + r.height;
+
+        // Check overlapping box with magnet radius
+        if (cx + magnetRadius > elL && cx - magnetRadius < elR &&
+            cy + magnetRadius > elT && cy - magnetRadius < elB) {
+            return el;
+        }
+    }
+    return null;
+}
+
+function performAction(el, type) {
+    if (type === 'source') {
+        // Picking up
+        if (selectedChar) {
+            // Swap or Deselect? Let's just deselect old, select new
+            selectedChar.el.classList.remove('selected');
+        }
+        selectedChar = { el: el, char: el.dataset.char };
+        el.classList.add('selected');
+        statusText.innerText = `Holding "${selectedChar.char}" - Move to a blank slot`;
+        statusText.style.color = "var(--focus-color)";
+    } 
+    else if (type === 'dest') {
+        // Dropping
+        const destIdx = el.dataset.idx;
+        const correctChar = currentWord[destIdx];
+
+        if (selectedChar && selectedChar.char === correctChar) {
+            // Correct Placement
+            el.innerText = selectedChar.char;
+            el.classList.add('filled');
+            selectedChar.el.classList.add('used');
+            selectedChar.el.classList.remove('selected');
+            selectedChar = null;
+            statusText.innerText = "Correct!";
+            statusText.style.color = "var(--success-color)";
+            checkWin();
+        } else if (selectedChar) {
+            // Wrong Placement
+            statusText.innerText = "Wrong Slot! Try Again.";
+            statusText.style.color = "#ff4444";
+            selectedChar.el.classList.remove('selected');
+            selectedChar = null;
+        }
+    }
+}
+
+function checkWin() {
+    const filled = document.querySelectorAll('.target-char.filled');
+    if (filled.length === currentWord.length) {
+        document.getElementById('completed-word').innerText = currentWord;
+        document.getElementById('win-screen').classList.remove('hidden');
+    }
+}
+
+// =========================================================
+// 3. UI HANDLERS
+// =========================================================
+document.getElementById('btn-setup').onclick = () => {
+    document.getElementById('intro-screen').classList.add('hidden');
+    document.getElementById('controls').classList.remove('hidden');
+    document.getElementById('hud').classList.remove('hidden');
+};
+
+let port, keepReading = false;
+document.getElementById('btn-connect').onclick = async () => {
+    try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        keepReading = true;
+        readLoop();
+        document.getElementById('btn-connect').innerText = "CONNECTED";
+        document.getElementById('btn-connect').disabled = true;
+    } catch (e) { alert("Error: " + e); }
+};
+
+document.getElementById('btn-load-cal').onclick = () => document.getElementById('file-input').click();
+document.getElementById('file-input').onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = (ev) => {
+        try {
+            solver.loadProfile(JSON.parse(ev.target.result));
+            document.getElementById('status-display').innerText = "READY TO START";
+            document.getElementById('status-display').style.color = "var(--success-color)";
+            document.getElementById('btn-start-game').disabled = false;
+            document.getElementById('btn-recenter').disabled = false;
+        } catch(err) { alert("Invalid JSON"); }
+    };
+    r.readAsText(file);
+};
+
+document.getElementById('btn-start-game').onclick = () => {
+    document.getElementById('game-board').classList.remove('hidden');
+    document.getElementById('controls').classList.add('hidden'); // Hide setup buttons during play
+    // Keep Recenter/Invert accessible via keys or re-show controls? 
+    // For now, let's keep controls visible actually, better for testing.
+    document.getElementById('controls').classList.remove('hidden'); 
+    
+    solver.recenter();
+    startLevel();
+    animate();
+};
+
+document.getElementById('btn-next-round').onclick = () => {
+    document.getElementById('win-screen').classList.add('hidden');
+    currentLevel++;
+    startLevel();
+};
+
+// Invert Buttons
+const btnYaw = document.getElementById('btn-inv-yaw');
+const btnPitch = document.getElementById('btn-inv-pitch');
+
+btnYaw.onclick = () => {
+    const active = solver.toggleYaw();
+    btnYaw.classList.toggle('active', active);
+};
+btnPitch.onclick = () => {
+    const active = solver.togglePitch();
+    btnPitch.classList.toggle('active', active);
+};
+
+document.getElementById('btn-recenter').onclick = () => solver.recenter();
+window.addEventListener('keydown', (e) => { if(e.code === 'Space') solver.recenter(); });
+
+// Serial Loop
+async function readLoop() {
+    const textDecoder = new TextDecoderStream();
+    port.readable.pipeTo(textDecoder.writable);
+    const reader = textDecoder.readable.getReader();
+    let buffer = "";
+    while (keepReading) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+            try {
+                const json = JSON.parse(line);
+                if (json.type === "imu" && json.quat) solver.processStream(...json.quat);
+            } catch (e) {}
+        }
+    }
+}
+
+// Animation Loop
+let lastTime = 0;
+function animate(time) {
+    requestAnimationFrame(animate);
+    const dt = (time - lastTime) / 1000 || 0;
+    lastTime = time;
+    updateGame(dt);
+}
+
+</script>
+</body>
+</html>

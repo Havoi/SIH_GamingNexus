@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>IMU → 3D Camera + Gesture Detection</title>
+<link rel="preconnect" href="https://unpkg.com">
+<style>
+  html,body{height:100%;margin:0;background:#071126;color:#d7f0ff;font-family:Inter,system-ui,Arial}
+  #ui{position:fixed;right:12px;top:12px;width:360px;background:rgba(6,12,22,0.85);padding:12px;border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,0.6);z-index:60}
+  label{display:block;font-size:13px;margin-top:8px}
+  input[type=range]{width:100%}
+  button{display:inline-block;margin-top:8px;padding:8px;border-radius:6px;border:none;background:#1f6feb;color:white;cursor:pointer}
+  .row{display:flex;gap:8px}
+  .row>button{flex:1}
+  #status{font-size:12px;margin-top:6px;color:#9ed0ff}
+  #log{height:120px;overflow:auto;background:rgba(255,255,255,0.02);padding:8px;border-radius:6px;font-size:12px;margin-top:8px}
+  #meters{display:flex;gap:8px;margin-top:8px}
+  .meter{flex:1;background:rgba(255,255,255,0.02);padding:8px;border-radius:6px;text-align:center}
+  #gestures{margin-top:10px}
+  .gesture{padding:6px;border-radius:6px;background:rgba(255,255,255,0.02);margin-top:6px}
+  canvas{display:block}
+  .small{font-size:12px;opacity:0.9}
+  .tag{display:inline-block;padding:4px 8px;border-radius:999px;background:#0f2b4a;margin-right:6px}
+</style>
+</head>
+<body>
+<div id="ui">
+  <div style="font-weight:700;font-size:15px">IMU → 3D Camera</div>
+  <div id="status" class="small">Status: <span id="statustxt">idle</span></div>
+
+  <label>Connection</label>
+  <div class="row"><button id="btnConnect">Connect</button><button id="btnDisconnect">Disconnect</button></div>
+
+  <label>Sensitivity <span id="sensVal" class="small">1.0</span></label>
+  <input id="sensitivity" type="range" min="0.2" max="4" step="0.01" value="1.0">
+
+  <label>Smoothing <span id="smoothVal" class="small">0.90</span></label>
+  <input id="smoothing" type="range" min="0.0" max="0.995" step="0.001" value="0.90">
+
+  <label>Deadzone <span id="dzoneVal" class="small">0.02</span></label>
+  <input id="deadzone" type="range" min="0" max="0.2" step="0.001" value="0.02">
+
+  <label>Freeze yaw if gyro &lt; (°/s) <span id="gyroThrVal" class="small">2.0</span></label>
+  <input id="gyroThreshold" type="range" min="0" max="10" step="0.1" value="2">
+
+  <div class="row"><button id="btnCal">Recenter</button><button id="btnZeroYaw">Zero All</button></div>
+
+  <div id="meters">
+    <div class="meter">Yaw: <div id="yawVal">0.0°</div></div>
+    <div class="meter">Pitch: <div id="pitchVal">0.0°</div></div>
+    <div class="meter">Roll: <div id="rollVal">0.0°</div></div>
+  </div>
+
+  <div id="gestures">
+    <div style="font-weight:600; margin-top:8px">Detected gestures</div>
+    <div id="gestList"></div>
+  </div>
+
+  <div id="log" class="small"></div>
+  <div style="margin-top:8px" class="small">Serve over <code>http://localhost</code>. Use Chrome/Edge. Gesture detection: flicks, double-tap (quick rotation), shake, circle (approx), hold.</div>
+</div>
+
+<script src="https://unpkg.com/three@0.158.0/build/three.min.js"></script>
+<script>
+/* ================== CONFIG ================== */
+const SERIAL_BAUD = 115200;
+const IMU_TO_WORLD_CORRECTION = new THREE.Quaternion();
+
+/* ================ THREE.JS SCENE ================ */
+let scene, camera, renderer, cube;
+function initThree(){
+  scene = new THREE.Scene(); scene.background = new THREE.Color(0x021127);
+  camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.05, 1000); camera.position.set(0,1.55,3);
+  scene.add(new THREE.HemisphereLight(0xffffff,0x404040,0.8));
+  const dl = new THREE.DirectionalLight(0xffffff,0.6); dl.position.set(5,8,4); scene.add(dl);
+  const grid = new THREE.GridHelper(10,20,0x223344,0x112233); scene.add(grid);
+  const geo = new THREE.BoxGeometry(0.6,0.6,0.6); const mat = new THREE.MeshStandardMaterial({metalness:0.3,roughness:0.45}); cube = new THREE.Mesh(geo,mat); cube.position.set(0,0.8,0); scene.add(cube);
+  renderer = new THREE.WebGLRenderer({antialias:true}); renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth, innerHeight); document.body.appendChild(renderer.domElement);
+  window.addEventListener('resize', ()=>{ camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+}
+initThree();
+
+/* ================ STATE & SMOOTHING ================ */
+const cameraQuat = new THREE.Quaternion(); cameraQuat.copy(camera.quaternion);
+let imuQuatRaw = new THREE.Quaternion();
+let calibInverse = new THREE.Quaternion(); calibInverse.identity();
+let lastGyro = [0,0,0];
+let connected = false;
+
+function animate(){ requestAnimationFrame(animate);
+  const smoothing = Number(document.getElementById('smoothing').value);
+  const deadzone = Number(document.getElementById('deadzone').value);
+  const sensitivity = Number(document.getElementById('sensitivity').value);
+  const gyroThreshold = Number(document.getElementById('gyroThreshold').value);
+
+  const corrected = new THREE.Quaternion().copy(IMU_TO_WORLD_CORRECTION).multiply(imuQuatRaw);
+  let applyCal = new THREE.Quaternion();
+  const mag = Math.sqrt(lastGyro[0]*lastGyro[0] + lastGyro[1]*lastGyro[1] + lastGyro[2]*lastGyro[2]);
+  if (mag < gyroThreshold){
+    const forward = new THREE.Vector3(0,0,-1).applyQuaternion(corrected);
+    const yaw = Math.atan2(forward.x, -forward.z);
+    const prevF = new THREE.Vector3(0,0,-1).applyQuaternion(cameraQuat);
+    const prevYaw = Math.atan2(prevF.x, -prevF.z);
+    const yawDiff = prevYaw - yaw;
+    const yawCorrection = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), yawDiff);
+    applyCal.copy(yawCorrection).multiply(corrected);
+  } else {
+    applyCal.copy(calibInverse).multiply(corrected);
+  }
+
+  const dot = Math.abs(cameraQuat.dot(applyCal));
+  const angle = 2 * Math.acos(Math.min(1, dot));
+  if (angle > deadzone){
+    const alpha = 1 - Math.pow(1 - (1 - smoothing), Math.max(1,60*(1/60)));
+    const sensFactor = Math.min(1, sensitivity * 0.3);
+    const finalAlpha = Math.min(1, alpha * (0.3 + sensFactor));
+    cameraQuat.slerp(applyCal, finalAlpha);
+  }
+  camera.quaternion.copy(cameraQuat);
+  cube.quaternion.slerp(camera.quaternion, 0.06);
+  renderer.render(scene, camera);
+}
+animate();
+
+/* ================ HELPERS ================ */
+function log(msg){ const e = document.getElementById('log'); e.innerText = (new Date()).toLocaleTimeString() + ' — ' + msg + '
+' + e.innerText; }
+function updateStatus(s){ document.getElementById('statustxt').innerText = s; }
+function quatToEulerDeg(q){ const e = new THREE.Euler().setFromQuaternion(q, 'YXZ'); return { yaw: THREE.MathUtils.radToDeg(e.y), pitch: THREE.MathUtils.radToDeg(e.x), roll: THREE.MathUtils.radToDeg(e.z) }; }
+
+/* ================ WEB SERIAL ================ */
+let port = null, reader = null; const textDecoder = new TextDecoderStream();
+async function connectSerial(){ updateStatus('Connecting...'); log('connectSerial'); if (!('serial' in navigator)){ updateStatus('Web Serial not available'); log('Web Serial not available'); return; }
+  try { const allowed = await navigator.serial.getPorts(); if (allowed && allowed.length>0){ port = allowed[0]; await openPort(port); return; } try{ port = await navigator.serial.requestPort(); }catch(e){ updateStatus('Chooser canceled'); log('Chooser canceled'); return; } await openPort(port); } catch(err){ console.error(err); updateStatus('Connect failed'); log('Connect failed: '+(err.message||err)); port=null; }
+}
+async function openPort(p){ try{ updateStatus('Opening port...'); await p.open({ baudRate: SERIAL_BAUD }); log('Port opened'); p.readable.pipeTo(textDecoder.writable).catch(e=>{}); reader = textDecoder.readable.getReader(); readLoop(reader,p).catch(e=>{}); connected = true; updateStatus('Connected'); }catch(err){ console.error(err); updateStatus('Open failed'); try{ if (p && p.readable) await p.close(); }catch(e){} port=null; } }
+async function readLoop(r,p){ let partial=''; log('read loop start'); try{ while(true){ const {value, done} = await r.read(); if (done) break; if (value){ partial += value; let idx; while((idx = partial.indexOf('
+')) >=0){ const line = partial.slice(0, idx).trim(); partial = partial.slice(idx+1); if (line.length) processIMULine(line); } } } }catch(err){ console.error('read err',err); updateStatus('Read error'); log('Read error: '+(err.message||err)); } finally{ try{ await r.cancel(); }catch(e){} try{ if (p && p.readable) await p.close(); }catch(e){} reader=null; port=null; connected=false; updateStatus('Disconnected'); log('read loop ended'); } }
+async function disconnectSerial(){ updateStatus('Disconnecting...'); log('disconnectSerial'); try{ if (reader){ try{ await reader.cancel(); }catch(e){} reader=null; } if (port){ try{ await port.close(); }catch(e){} port=null; } connected=false; updateStatus('Disconnected'); }catch(err){ console.error(err); updateStatus('Disconnect error'); } }
+
+/* ================ IMU LINE PROCESSING & GESTURE BUFFER ================ */
+// We'll keep a sliding buffer of recent samples (quaternions, gyro, acc, timestamp)
+const SAMPLE_BUFFER_MS = 800; // window to analyze for most gestures
+const sampleBuffer = []; // each: {t, quat (THREE.Quaternion), gyro:[gx,gy,gz], acc:[ax,ay,az]}
+
+function pushSample(obj){ const now = performance.now(); const q = new THREE.Quaternion(obj.quat[1], obj.quat[2], obj.quat[3], obj.quat[0]); const g = Array.isArray(obj.gyro)? obj.gyro.map(Math.abs) : [0,0,0]; const a = Array.isArray(obj.acc)? obj.acc : [0,0,0]; sampleBuffer.push({t:now, quat:q, gyro:g, acc:a}); // drop old
+  while(sampleBuffer.length && (now - sampleBuffer[0].t) > SAMPLE_BUFFER_MS) sampleBuffer.shift(); }
+
+function processIMULine(text){ let obj; try{ obj = JSON.parse(text); }catch(e){ log('JSON parse failed'); return; } if (!obj || obj.type !== 'imu' || !Array.isArray(obj.quat)) return; imuQuatRaw.set(obj.quat[1], obj.quat[2], obj.quat[3], obj.quat[0]); if (Array.isArray(obj.gyro) && obj.gyro.length>=3) lastGyro = [ Math.abs(obj.gyro[0]), Math.abs(obj.gyro[1]), Math.abs(obj.gyro[2]) ]; pushSample(obj); updateEulerDisplay(); runGestureDetectors(); }
+
+function updateEulerDisplay(){ const world = new THREE.Quaternion().copy(IMU_TO_WORLD_CORRECTION).multiply(imuQuatRaw); const e = quatToEulerDeg(world); document.getElementById('yawVal').innerText = e.yaw.toFixed(1)+'°'; document.getElementById('pitchVal').innerText = e.pitch.toFixed(1)+'°'; document.getElementById('rollVal').innerText = e.roll.toFixed(1)+'°'; }
+
+/* ================ GESTURE DETECTION ALGORITHMS ================ */
+// We'll implement several detectors that analyze sampleBuffer and emit events when detection conditions are met.
+const gestureState = { lastDetected: 0 };
+const GESTURE_COOLDOWN_MS = 600; // avoid spamming
+
+function runGestureDetectors(){ const now = performance.now(); if (now - gestureState.lastDetected < GESTURE_COOLDOWN_MS) return; // cooldown
+  // compute simple metrics over window
+  if (sampleBuffer.length < 3) return;
+  // 1) Flick detection (fast yaw or pitch change)
+  if (detectFlick()) return;
+  // 2) Double-tap (quick forward-back pitch bounce)
+  if (detectDoubleTap()) return;
+  // 3) Shake (repeated sign changes / high accel)
+  if (detectShake()) return;
+  // 4) Circle (approx rotating around yaw continuously)
+  if (detectCircle()) return;
+  // 5) Hold (stable orientation for >600ms)
+  if (detectHold()) return;
+}
+
+function emitGesture(name, info){ gestureState.lastDetected = performance.now(); const el = document.getElementById('gestList'); const node = document.createElement('div'); node.className='gesture'; node.innerHTML = '<span class="tag">'+name+'</span>' + (info?('<span class="small">'+info+'</span>'):''); el.prepend(node); log('Gesture: '+name + (info?(' -> '+info):'')); }
+
+// helper: compute angular velocity approx between first and last sample in window (deg/s)
+function computeAngVel(){ const first = sampleBuffer[0], last = sampleBuffer[sampleBuffer.length-1]; const dt = (last.t - first.t)/1000.0; if (dt <= 0) return {wx:0,wy:0,wz:0}; // compute relative rotation quaternion: qrel = q1 * q0^{-1}
+  const q0 = first.quat.clone().invert(); const qrel = last.quat.clone().multiply(q0); // axis-angle
+  const angle = 2 * Math.acos(Math.max(-1, Math.min(1, qrel.w))); const s = Math.sqrt(1 - qrel.w*qrel.w) || 1; const ax = qrel.x / s; const ay = qrel.y / s; const az = qrel.z / s; const angDeg = THREE.MathUtils.radToDeg(angle);
+  // project onto body axes approximated as angDeg/dt * axis components
+  return { wx: (angDeg * ax)/dt, wy: (angDeg * ay)/dt, wz: (angDeg * az)/dt };
+}
+
+function detectFlick(){ // detect a fast angular velocity spike on yaw or pitch
+  const ang = computeAngVel(); const absYaw = Math.abs(ang.wy); const absPitch = Math.abs(ang.wx); const absRoll = Math.abs(ang.wz);
+  // thresholds (tunable)
+  if (absYaw > 180){ emitGesture('Flick Yaw', Math.round(absYaw)+'°/s'); return true; }
+  if (absPitch > 180){ emitGesture('Flick Pitch', Math.round(absPitch)+'°/s'); return true; }
+  if (absRoll > 240){ emitGesture('Flick Roll', Math.round(absRoll)+'°/s'); return true; }
+  return false;
+}
+
+let lastTapTime = 0; function detectDoubleTap(){ // quick forward-back pitch movement: look for sign change in pitch velocity
+  // compute pitched angles across buffer
+  const pitches = sampleBuffer.map(s=> quatToEulerDeg(s.quat).pitch ); if (pitches.length < 4) return false;
+  // detect quick negative->positive bounce magnitude
+  const diffs = []; for(let i=1;i<pitches.length;i++) diffs.push(pitches[i]-pitches[i-1]); const maxDiff = Math.max(...diffs.map(Math.abs)); if (maxDiff > 12){ // quick jerk
+    const now = performance.now(); if (now - lastTapTime < 500){ emitGesture('Double Tap (pitch)'); lastTapTime = 0; return true; } lastTapTime = now; }
+  return false; }
+
+let lastShake = 0; function detectShake(){ // if high gyro magnitude and changes direction repeatedly
+  const mags = sampleBuffer.map(s => Math.sqrt(s.gyro[0]*s.gyro[0] + s.gyro[1]*s.gyro[1] + s.gyro[2]*s.gyro[2])); const avg = mags.reduce((a,b)=>a+b,0)/mags.length; if (avg > 120){ // deg/s
+    // check sign flips on gyro x or y
+    let flips = 0; for(let i=1;i<sampleBuffer.length;i++){ const prev = sampleBuffer[i-1].gyro[0], cur = sampleBuffer[i].gyro[0]; if (prev*cur < 0) flips++; }
+    if (flips >= 2 && performance.now() - lastShake > 800){ lastShake = performance.now(); emitGesture('Shake'); return true; }
+  }
+  return false; }
+
+function detectCircle(){ // approximate if yaw has rotated near 270-360 degrees in window
+  const yaws = sampleBuffer.map(s => quatToEulerDeg(s.quat).yaw); if (yaws.length < 6) return false;
+  // unwrap yaws
+  let unwrapped = [yaws[0]]; for(let i=1;i<yaws.length;i++){ let d = yaws[i] - yaws[i-1]; if (d > 180) d -= 360; if (d < -180) d += 360; unwrapped.push(unwrapped[unwrapped.length-1] + d); }
+  const delta = Math.abs(unwrapped[unwrapped.length-1] - unwrapped[0]); if (delta > 200){ emitGesture('Circle', Math.round(delta)+'°'); return true; }
+  return false; }
+
+let holdStart = null; function detectHold(){ // stable orientation: low gyro magnitude across window
+  const mags = sampleBuffer.map(s => Math.sqrt(s.gyro[0]*s.gyro[0] + s.gyro[1]*s.gyro[1] + s.gyro[2]*s.gyro[2])); const maxMag = Math.max(...mags);
+  if (maxMag < 8){ if (!holdStart) holdStart = sampleBuffer[0].t; else { if (performance.now() - holdStart > 650){ holdStart = null; emitGesture('Hold'); return true; } } } else { holdStart = null; }
+  return false; }
+
+/* ================ UI & WIRING ================ */
+function recenterCalibration(){ const corrected = new THREE.Quaternion().copy(IMU_TO_WORLD_CORRECTION).multiply(imuQuatRaw); const forward = new THREE.Vector3(0,0,-1).applyQuaternion(corrected); const yaw = Math.atan2(forward.x, -forward.z); const invYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), -yaw); calibInverse.copy(invYaw); log('Recenter yaw='+ (yaw*180/Math.PI).toFixed(1)+'°'); }
+function zeroAll(){ calibInverse.identity(); log('Zeroed all'); }
+
+document.getElementById('btnCal').addEventListener('click', recenterCalibration);
+document.getElementById('btnZeroYaw').addEventListener('click', zeroAll);
+document.getElementById('btnConnect').addEventListener('click', connectSerial);
+document.getElementById('btnDisconnect').addEventListener('click', disconnectSerial);
+
+// slider displays
+const map = { sensitivity: 'sensVal', smoothing: 'smoothVal', deadzone: 'dzoneVal', gyroThreshold: 'gyroThrVal' };
+Object.keys(map).forEach(k=>{ const el = document.getElementById(k); const out = document.getElementById(map[k]); const set = ()=> out.innerText = el.value; el.addEventListener('input', set); set(); });
+
+updateStatus('idle — ready'); log('Page ready with gesture detection');
+</script>
+</body>
+</html>

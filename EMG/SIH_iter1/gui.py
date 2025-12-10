@@ -43,7 +43,7 @@ from model_wrapper import ModelWrapper
 import serial
 
 # ------------------ Default config (can be edited in GUI) ------------------
-DEFAULT_COM = "COM11"
+DEFAULT_COM = "COM5"
 DEFAULT_BAUD = 115200
 DEFAULT_MODEL = "emg_mlp_model_clean.joblib"
 DEFAULT_SCALER = "emg_scaler_clean.pkl"

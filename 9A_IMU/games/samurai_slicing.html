@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Katana Fruits | Range Adaptive</title>
+    <style>
+        body { margin: 0; background: #111; overflow: hidden; font-family: 'Segoe UI', sans-serif; user-select: none; }
+
+        /* UI OVERLAY */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
+
+        /* HUD */
+        #header {
+            padding: 20px; display: flex; justify-content: space-between; 
+            color: #fff; text-shadow: 2px 2px 0 #000;
+        }
+        .score-val { font-size: 48px; font-weight: 900; color: #ffcc00; }
+        .label { font-size: 14px; color: #aaa; text-transform: uppercase; letter-spacing: 2px; }
+
+        /* MENU PANELS */
+        #menu-container {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 100%; display: flex; justify-content: center; pointer-events: auto; z-index: 10;
+        }
+        .panel {
+            background: rgba(20, 20, 20, 0.95); border: 2px solid #ffcc00; padding: 40px;
+            border-radius: 15px; text-align: center; color: #fff; max-width: 450px;
+            display: none; box-shadow: 0 0 50px rgba(255, 204, 0, 0.3);
+        }
+        .panel.active { display: block; }
+        
+        h1 { margin: 0 0 10px 0; color: #ffcc00; font-family: 'Courier New', monospace; letter-spacing: -2px; font-size: 40px; }
+        p { color: #ddd; margin-bottom: 30px; font-size: 16px; }
+
+        /* BUTTONS */
+        button {
+            background: #ffcc00; color: #000; border: none; padding: 15px 30px;
+            font-size: 18px; font-weight: bold; cursor: pointer; text-transform: uppercase;
+            clip-path: polygon(10% 0, 100% 0, 100% 80%, 90% 100%, 0 100%, 0 20%);
+            transition: transform 0.1s;
+        }
+        button:hover { transform: scale(1.05); background: #ffee55; }
+        button:disabled { background: #555; color: #888; transform: none; }
+
+        /* CONTROLS BAR */
+        #controls-bar {
+            padding: 20px; background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+            pointer-events: auto; color: white; display: flex; gap: 20px; align-items: flex-end;
+        }
+        
+        .control-block { display: flex; flex-direction: column; gap: 5px; }
+        label { font-size: 10px; font-weight: bold; color: #ffcc00; }
+        input[type="range"] { accent-color: #ffcc00; width: 100px; cursor: pointer; }
+
+        .toggle-btn { font-size: 10px; padding: 8px 12px; background: #333; color: #aaa; border: 1px solid #555; cursor: pointer; }
+        .toggle-btn.active { background: #ffcc00; color: #000; border-color: #ffcc00; }
+
+        /* Saturation Bars */
+        .sat-wrapper { width: 120px; margin-right: 20px; border-right: 1px solid #333; padding-right: 20px; }
+        .sat-track { width: 100%; height: 6px; background: #333; margin-top: 4px; position: relative; }
+        .sat-fill { width: 0%; height: 100%; background: #ffcc00; position: absolute; left: 50%; transition: width 0.05s, left 0.05s; }
+
+        /* CANVAS */
+        canvas { display: block; position: absolute; top: 0; left: 0; z-index: 0; }
+        
+        input[type="file"] { display: none; }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+    }
+    </script>
+</head>
+<body>
+
+<canvas id="game-canvas"></canvas>
+
+<div id="ui-layer">
+    <div id="header">
+        <div>
+            <div class="score-val" id="score-val">0</div>
+            <div class="label">SCORE</div>
+        </div>
+        <div style="text-align: right">
+            <div class="label" style="color:#ffcc00">KATANA MODE</div>
+            <div class="label" id="status-text">WAITING</div>
+        </div>
+    </div>
+
+    <div id="menu-container">
+        <div id="screen-connect" class="panel active">
+            <h1>KATANA FRUITS</h1>
+            <p>Connect your IMU blade to begin training.</p>
+            <button id="btn-connect">Connect Sensor</button>
+        </div>
+
+        <div id="screen-load" class="panel">
+            <h1>SHARPEN BLADE</h1>
+            <p>Load your Range Calibration profile.</p>
+            <button id="btn-load-file">Select Profile</button>
+            <input type="file" id="file-input" accept=".json">
+        </div>
+
+        <div id="screen-ready" class="panel">
+            <h1>READY</h1>
+            <p>Slice fruits. Avoid bombs.<br>Swing with precision.</p>
+            <button id="btn-start">Unsheathe</button>
+        </div>
+    </div>
+
+    <div id="controls-bar">
+        <div class="sat-wrapper">
+            <label>YAW LIMIT</label>
+            <div class="sat-track"><div id="sat-yaw" class="sat-fill"></div></div>
+            <div style="height: 5px;"></div>
+            <label>PITCH LIMIT</label>
+            <div class="sat-track"><div id="sat-pitch" class="sat-fill"></div></div>
+        </div>
+
+        <div class="control-block">
+            <label>SENSITIVITY</label>
+            <input type="range" id="input-sens" min="0.5" max="3.0" step="0.1" value="1.0">
+        </div>
+        <div class="control-block">
+            <label>SMOOTHING</label>
+            <input type="range" id="input-smooth" min="0.01" max="0.4" step="0.01" value="0.1">
+        </div>
+
+        <div class="control-block" style="flex-direction: row; gap: 5px;">
+            <button id="btn-inv-yaw" class="toggle-btn active">Yaw: Norm</button>
+            <button id="btn-inv-pitch" class="toggle-btn active">Pitch: Norm</button>
+        </div>
+
+        <button id="btn-recenter" class="toggle-btn" style="margin-left: auto; width: auto; background: #444; color: #fff;">Recenter (Space)</button>
+    </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// =========================================================
+// 1. RANGE ADAPTIVE SOLVER
+// =========================================================
+class RangeAdaptiveSolver {
+    constructor() {
+        this.yawAxis = new THREE.Vector3(0, 1, 0);
+        this.pitchAxis = new THREE.Vector3(1, 0, 0);
+        this.baseYawMult = 1.0;
+        this.basePitchMult = 1.0;
+        this.userYawInv = 1.0;
+        this.userPitchInv = 1.0;
+        
+        this.sensitivity = 1.0;
+        this.smoothing = 0.1; 
+
+        this.range = { minYaw: -0.5, maxYaw: 0.5, minPitch: -0.5, maxPitch: 0.5 };
+        
+        this.tareQuat = new THREE.Quaternion();
+        this.currentQuat = new THREE.Quaternion();
+        this.targetQuat = new THREE.Quaternion();
+        this.saturation = { yaw: 0, pitch: 0 };
+    }
+
+    loadProfile(json) {
+        this.yawAxis.set(json.yawAxis.x, json.yawAxis.y, json.yawAxis.z);
+        this.pitchAxis.set(json.pitchAxis.x, json.pitchAxis.y, json.pitchAxis.z);
+        this.baseYawMult = json.yawMultiplier || 1.0;
+        this.basePitchMult = json.pitchMultiplier || 1.0;
+        if (json.range) this.range = json.range;
+    }
+    
+    toggleYaw() { this.userYawInv *= -1; return this.userYawInv === 1; }
+    togglePitch() { this.userPitchInv *= -1; return this.userPitchInv === 1; }
+
+    updateRaw(w, x, y, z) {
+        this.targetQuat.set(x, y, z, w).normalize();
+    }
+    
+    updateSmoothing() {
+        this.currentQuat.slerp(this.targetQuat, this.smoothing);
+    }
+
+    recenter() {
+        this.tareQuat.copy(this.currentQuat);
+    }
+
+    // Returns Screen X/Y (0 to 1)
+    getCursor() {
+        const delta = new THREE.Quaternion().copy(this.tareQuat).invert().multiply(this.currentQuat);
+        const w = Math.max(-1, Math.min(1, delta.w));
+        const angle = 2 * Math.acos(w);
+        
+        if (Math.abs(angle) < 0.0001) return { x: 0.5, y: 0.5 };
+
+        const s = Math.sqrt(1 - w*w);
+        const axis = new THREE.Vector3(delta.x, delta.y, delta.z).divideScalar(s);
+        
+        let rawYaw = angle * axis.dot(this.yawAxis) * this.baseYawMult * this.userYawInv;
+        let rawPitch = angle * axis.dot(this.pitchAxis) * this.basePitchMult * this.userPitchInv;
+
+        let normYaw = this.mapRange(rawYaw, this.range.minYaw, this.range.maxYaw, -1, 1);
+        let normPitch = this.mapRange(rawPitch, this.range.minPitch, this.range.maxPitch, -1, 1);
+
+        this.saturation.yaw = normYaw;
+        this.saturation.pitch = normPitch;
+
+        // Map -1/1 to 0/1 for screen coords
+        // Invert X because Yaw Left is usually negative X on screen
+        let sx = (-normYaw * this.sensitivity + 1) / 2;
+        let sy = (normPitch * this.sensitivity + 1) / 2;
+
+        return { x: sx, y: sy };
+    }
+
+    mapRange(val, inMin, inMax, outMin, outMax) {
+        const clampedVal = Math.max(inMin, Math.min(val, inMax));
+        return (clampedVal - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+    }
+}
+
+const solver = new RangeAdaptiveSolver();
+
+// =========================================================
+// 2. CANVAS GAME ENGINE
+// =========================================================
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
+let width, height;
+
+function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- GAME STATE ---
+let gameState = "SETUP";
+let score = 0;
+let fruits = [];
+let particles = [];
+let trail = [];
+let lastTime = 0;
+let spawnTimer = 0;
+
+// Config
+const GRAVITY = 800;
+const TRAIL_LENGTH = 10;
+
+// Assets (Simple Shapes for now)
+const FRUIT_COLORS = ["#ff4d4d", "#ffa64d", "#ffff4d", "#4dff4d", "#4d4dff"];
+
+class Fruit {
+    constructor() {
+        this.x = Math.random() * (width - 100) + 50;
+        this.y = height + 50;
+        this.vx = (Math.random() - 0.5) * 300;
+        this.vy = -(Math.random() * 400 + 600); // Launch speed
+        this.radius = 30 + Math.random() * 20;
+        this.color = FRUIT_COLORS[Math.floor(Math.random() * FRUIT_COLORS.length)];
+        this.active = true;
+        this.sliced = false;
+        this.rotation = 0;
+        this.rotSpeed = (Math.random() - 0.5) * 5;
+    }
+
+    update(dt) {
+        this.vy += GRAVITY * dt;
+        this.x += this.vx * dt;
+        this.y += this.vy * dt;
+        this.rotation += this.rotSpeed * dt;
+
+        if (this.y > height + 100) this.active = false;
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+        
+        if (!this.sliced) {
+            ctx.beginPath();
+            ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = "#fff";
+            ctx.stroke();
+        } else {
+            // Sliced halves
+            ctx.globalAlpha = 0.5;
+            ctx.beginPath();
+            ctx.arc(-10, 0, this.radius, 0, Math.PI, true);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.arc(10, 0, this.radius, 0, Math.PI, false);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+        }
+        ctx.restore();
+    }
+}
+
+class Particle {
+    constructor(x, y, color) {
+        this.x = x; this.y = y;
+        this.vx = (Math.random() - 0.5) * 400;
+        this.vy = (Math.random() - 0.5) * 400;
+        this.life = 1.0;
+        this.color = color;
+    }
+    update(dt) {
+        this.x += this.vx * dt;
+        this.y += this.vy * dt;
+        this.life -= dt * 2;
+    }
+    draw(ctx) {
+        ctx.globalAlpha = this.life;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+    }
+}
+
+function spawnFruit() {
+    fruits.push(new Fruit());
+}
+
+function createExplosion(x, y, color) {
+    for(let i=0; i<15; i++) {
+        particles.push(new Particle(x, y, color));
+    }
+}
+
+function updateGame(dt) {
+    if (gameState !== "PLAYING") return;
+
+    // 1. UPDATE CURSOR (IMU)
+    solver.updateSmoothing();
+    const pos = solver.getCursor();
+    const cx = pos.x * width;
+    const cy = pos.y * height;
+
+    // Update Trail
+    trail.push({ x: cx, y: cy });
+    if (trail.length > TRAIL_LENGTH) trail.shift();
+
+    // 2. CHECK COLLISIONS (Slicing)
+    // We check line segments of the trail against fruit circles
+    if (trail.length >= 2) {
+        const p1 = trail[trail.length - 2];
+        const p2 = trail[trail.length - 1];
+        
+        // Speed check (must be moving fast to slice?) - Optional
+        // For rehab, we might allow slow slicing. Let's keep it simple: just collision.
+
+        fruits.forEach(f => {
+            if (!f.active || f.sliced) return;
+            
+            // Simple distance check to current point for efficiency
+            const dist = Math.hypot(f.x - cx, f.y - cy);
+            if (dist < f.radius) {
+                f.sliced = true;
+                score += 10;
+                document.getElementById('score-val').innerText = score;
+                createExplosion(f.x, f.y, f.color);
+                f.vx += (Math.random() - 0.5) * 100; // Knockback
+                f.vy -= 100;
+            }
+        });
+    }
+
+    // 3. UPDATE ENTITIES
+    spawnTimer += dt;
+    if (spawnTimer > 1.5) { // Spawn rate
+        spawnFruit();
+        spawnTimer = 0;
+    }
+
+    fruits.forEach(f => f.update(dt));
+    fruits = fruits.filter(f => f.active);
+
+    particles.forEach(p => p.update(dt));
+    particles = particles.filter(p => p.life > 0);
+
+    // 4. UI BARS
+    const yawP = solver.saturation.yaw * 50; 
+    const pitP = solver.saturation.pitch * 50;
+    document.getElementById('sat-yaw').style.left = (50 + Math.min(0, yawP)) + "%";
+    document.getElementById('sat-yaw').style.width = Math.abs(yawP) + "%";
+    document.getElementById('sat-pitch').style.left = (50 + Math.min(0, pitP)) + "%";
+    document.getElementById('sat-pitch').style.width = Math.abs(pitP) + "%";
+}
+
+function drawGame() {
+    // Clear
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, width, height);
+
+    // Draw Fruits
+    fruits.forEach(f => f.draw(ctx));
+
+    // Draw Particles
+    particles.forEach(p => p.draw(ctx));
+
+    // Draw Blade Trail
+    if (trail.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(trail[0].x, trail[0].y);
+        for (let i = 1; i < trail.length; i++) {
+            // Bezier smoothing could go here, but lineTo is faster
+            ctx.lineTo(trail[i].x, trail[i].y);
+        }
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = 8;
+        ctx.strokeStyle = "#fff";
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = "#00ffff"; // Neon Blue Blade
+        ctx.stroke();
+        
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = "#00ffff";
+        ctx.stroke();
+        
+        ctx.shadowBlur = 0; // Reset
+    }
+}
+
+function loop(time) {
+    requestAnimationFrame(loop);
+    const dt = (time - lastTime) / 1000;
+    lastTime = time;
+    updateGame(dt);
+    drawGame();
+}
+loop(0);
+
+// =========================================================
+// 3. UI HANDLERS
+// =========================================================
+let port, keepReading = false;
+const screens = ['screen-connect', 'screen-load', 'screen-ready'];
+
+function switchScreen(id) {
+    screens.forEach(s => document.getElementById(s).classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+}
+
+document.getElementById('btn-connect').onclick = async () => {
+    try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        keepReading = true;
+        readLoop();
+        switchScreen('screen-load');
+    } catch (e) { alert("Connection Error"); }
+};
+
+document.getElementById('btn-load-file').onclick = () => document.getElementById('file-input').click();
+document.getElementById('file-input').onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+        try {
+            solver.loadProfile(JSON.parse(evt.target.result));
+            switchScreen('screen-ready');
+        } catch (err) { alert("Invalid File"); }
+    };
+    reader.readAsText(file);
+};
+
+document.getElementById('btn-start').onclick = () => {
+    solver.recenter();
+    document.getElementById('menu-container').style.display = "none";
+    gameState = "PLAYING";
+    document.getElementById('status-text').innerText = "SLICING";
+};
+
+const btnInvYaw = document.getElementById('btn-inv-yaw');
+const btnInvPitch = document.getElementById('btn-inv-pitch');
+
+btnInvYaw.onclick = () => {
+    const norm = solver.toggleYaw();
+    btnInvYaw.innerText = norm ? "Yaw: Norm" : "Yaw: INV";
+    btnInvYaw.className = norm ? "toggle-btn active" : "toggle-btn inverted";
+};
+btnInvPitch.onclick = () => {
+    const norm = solver.togglePitch();
+    btnInvPitch.innerText = norm ? "Pitch: Norm" : "Pitch: INV";
+    btnInvPitch.className = norm ? "toggle-btn active" : "toggle-btn inverted";
+};
+
+document.getElementById('input-sens').oninput = (e) => solver.sensitivity = parseFloat(e.target.value);
+document.getElementById('input-smooth').oninput = (e) => solver.smoothing = parseFloat(e.target.value);
+document.getElementById('btn-recenter').onclick = () => solver.recenter();
+
+window.addEventListener('keydown', (e) => {
+    if(e.code === 'Space') solver.recenter();
+    if(e.code === 'Escape') {
+        const m = document.getElementById('menu-container');
+        m.style.display = (m.style.display === 'none') ? 'flex' : 'none';
+    }
+});
+
+async function readLoop() {
+    const textDecoder = new TextDecoderStream();
+    port.readable.pipeTo(textDecoder.writable);
+    const reader = textDecoder.readable.getReader();
+    let buffer = "";
+    while (keepReading) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+            try {
+                const json = JSON.parse(line);
+                if (json.type === "imu" && json.quat) solver.updateRaw(...json.quat);
+            } catch (e) {}
+        }
+    }
+}
+</script>
+</body>
+</html>

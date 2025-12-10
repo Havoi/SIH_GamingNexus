@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMU Tare & Matrix Configurator</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Courier New', monospace; background: #1a1a1a; color: #00ff00; }
+        #ui-container {
+            position: absolute; top: 10px; left: 10px; z-index: 10;
+            background: rgba(0, 0, 0, 0.8); padding: 15px; border: 1px solid #00ff00;
+            max-width: 400px;
+        }
+        button {
+            background: #003300; color: #00ff00; border: 1px solid #00ff00;
+            padding: 10px 20px; cursor: pointer; font-weight: bold; margin-bottom: 10px; width: 100%;
+        }
+        button:hover { background: #00ff00; color: #000; }
+        .data-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 12px; }
+        #matrix-output {
+            margin-top: 15px; padding: 10px; background: #000; border: 1px dashed #00ff00;
+            white-space: pre; font-size: 10px; display: none;
+        }
+        h3 { margin-top: 0; text-transform: uppercase; border-bottom: 1px solid #00ff00; padding-bottom: 5px; }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+            }
+        }
+    </script>
+</head>
+<body>
+
+<div id="ui-container">
+    <h3>IMU Calibration Tool</h3>
+    <button id="btn-connect">1. CONNECT SERIAL (COM10)</button>
+    <button id="btn-tare">2. LOCK ORIENTATION (TARE)</button>
+    
+    <div id="status">Status: Disconnected</div>
+    <br>
+    <div class="data-row"><span>Raw Quaternion:</span> <span id="val-raw">0, 0, 0, 1</span></div>
+    <div class="data-row"><span>Corrected Quat:</span> <span id="val-cor">0, 0, 0, 1</span></div>
+    
+    <div id="matrix-output">
+        </div>
+</div>
+
+<script type="module">
+    import * as THREE from 'three';
+
+    // --- THREE.JS SETUP ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x222222);
+
+    // Camera
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 2, 5);
+    camera.lookAt(0, 0, 0);
+
+    // Renderer
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Helpers
+    const gridHelper = new THREE.GridHelper(10, 10);
+    scene.add(gridHelper);
+    const axesHelper = new THREE.AxesHelper(2);
+    scene.add(axesHelper);
+
+    // The Object (Cube representing IMU)
+    const geometry = new THREE.BoxGeometry(2, 0.5, 1);
+    // Materials to distinguish faces (Front is Red)
+    const materials = [
+        new THREE.MeshBasicMaterial({ color: 0x555555 }), // Right
+        new THREE.MeshBasicMaterial({ color: 0x555555 }), // Left
+        new THREE.MeshBasicMaterial({ color: 0x00ff00 }), // Top (Green)
+        new THREE.MeshBasicMaterial({ color: 0x555555 }), // Bottom
+        new THREE.MeshBasicMaterial({ color: 0xff0000 }), // Front (Red - Forward)
+        new THREE.MeshBasicMaterial({ color: 0x0000ff })  // Back (Blue)
+    ];
+    const imuBox = new THREE.Mesh(geometry, materials);
+    scene.add(imuBox);
+
+    // --- STATE VARIABLES ---
+    let rawQuat = new THREE.Quaternion();
+    let tareQuat = new THREE.Quaternion(); // Identity
+    let finalQuat = new THREE.Quaternion();
+    let port, reader;
+    let keepReading = false;
+
+    // --- SERIAL CONNECTION LOGIC ---
+    document.getElementById('btn-connect').addEventListener('click', async () => {
+        if ('serial' in navigator) {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 }); // Adjust if your ESP32 uses 9600
+                document.getElementById('status').innerText = "Status: Connected & Streaming";
+                keepReading = true;
+                readSerialLoop();
+            } catch (err) {
+                console.error("Serial Error:", err);
+                alert("Failed to connect: " + err);
+            }
+        } else {
+            alert("Web Serial API not supported in this browser. Use Chrome or Edge.");
+        }
+    });
+
+    async function readSerialLoop() {
+        const textDecoder = new TextDecoderStream();
+        const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+        const reader = textDecoder.readable.getReader();
+        let buffer = "";
+
+        while (keepReading) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value) {
+                buffer += value;
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Keep incomplete line in buffer
+
+                for (const line of lines) {
+                    try {
+                        const json = JSON.parse(line.trim());
+                        if (json.type === "imu" && json.quat) {
+                            updateIMU(json.quat);
+                        }
+                    } catch (e) {
+                        // Partial JSON or garbage data, ignore
+                    }
+                }
+            }
+        }
+    }
+
+    // --- MATH & UPDATE LOGIC ---
+    function updateIMU(qArray) {
+        // 1. Map ESP32 Quaternion to Three.js Frame
+        // This mapping depends on how your sensor is mounted.
+        // Common mapping: w, x, y, z -> Standard is (x, y, z, w)
+        // If your box rotates weirdly, swap these indices.
+        // Assuming input is [w, x, y, z] or similar. 
+        // Based on your snippet: [0.014, -0.99, 0.05, -0.007] -> likely [w, x, y, z]
+        
+        // Trial mapping for standard MPU/ICM orientations:
+        // x -> y, y -> z, z -> x is common for "Z-up to Y-up" conversion
+        // But let's start with direct mapping and let you visually verify.
+        
+        // Note: Three.js Quaternion(x, y, z, w)
+        rawQuat.set(qArray[1], qArray[2], qArray[3], qArray[0]).normalize();
+
+        document.getElementById('val-raw').innerText = 
+            `${rawQuat.x.toFixed(2)}, ${rawQuat.y.toFixed(2)}, ${rawQuat.z.toFixed(2)}, ${rawQuat.w.toFixed(2)}`;
+    }
+
+    // --- TARE / LOCK LOGIC ---
+    document.getElementById('btn-tare').addEventListener('click', () => {
+        // Math: To make current orientation "Zero", we need the Inverse of current.
+        // Correction = Raw_Current ^ -1
+        tareQuat.copy(rawQuat).invert();
+        
+        // Display the Matrix for the user
+        const rotationMatrix = new THREE.Matrix4();
+        rotationMatrix.makeRotationFromQuaternion(tareQuat);
+        
+        const m = rotationMatrix.elements;
+        const matrixString = 
+`CONFIGURATION MATRIX (Copy this):
+[ ${m[0].toFixed(3)}, ${m[4].toFixed(3)}, ${m[8].toFixed(3)}, ${m[12].toFixed(3)} ]
+[ ${m[1].toFixed(3)}, ${m[5].toFixed(3)}, ${m[9].toFixed(3)}, ${m[13].toFixed(3)} ]
+[ ${m[2].toFixed(3)}, ${m[6].toFixed(3)}, ${m[10].toFixed(3)}, ${m[14].toFixed(3)} ]
+[ ${m[3].toFixed(3)}, ${m[7].toFixed(3)}, ${m[11].toFixed(3)}, ${m[15].toFixed(3)} ]`;
+
+        const outputDiv = document.getElementById('matrix-output');
+        outputDiv.style.display = 'block';
+        outputDiv.innerText = matrixString;
+    });
+
+    // --- RENDER LOOP ---
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // Apply Correction: Final = Tare * Raw
+        finalQuat.multiplyQuaternions(tareQuat, rawQuat);
+        
+        imuBox.quaternion.copy(finalQuat);
+        
+        document.getElementById('val-cor').innerText = 
+            `${finalQuat.x.toFixed(2)}, ${finalQuat.y.toFixed(2)}, ${finalQuat.z.toFixed(2)}, ${finalQuat.w.toFixed(2)}`;
+
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // Resize Handler
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+
+</body>
+</html>

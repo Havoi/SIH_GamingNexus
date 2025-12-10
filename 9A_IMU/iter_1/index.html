@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>IMU Aim Game — Quick Recenter</title>
+<style>
+:root{
+  --bg: #061020;
+  --panel: #0f1724;
+  --muted: #9fb3d6;
+  --accent: #78a1ff;
+  --good: #86efac;
+  --bad: #fca5a5;
+  --glass: rgba(255,255,255,0.03);
+}
+html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,Arial;color:#e6eef6;background:linear-gradient(180deg,#041022 0%, #071427 100%);}
+#app{display:flex;gap:12px;padding:14px;box-sizing:border-box;height:100vh;}
+#left{width:380px;background:var(--panel);border-radius:10px;padding:14px;box-sizing:border-box;border:1px solid rgba(255,255,255,0.03);}
+#right{flex:1;background:linear-gradient(180deg,#071427 0%, #051024 100%);border-radius:10px;padding:12px;box-sizing:border-box;border:1px solid rgba(255,255,255,0.03);display:flex;flex-direction:column;}
+h1{margin:0;font-size:18px;}
+.muted{color:var(--muted);font-size:13px;}
+.row{display:flex;gap:8px;align-items:center;margin-top:10px;}
+.btn{background:#0b2130;color:#e6eef6;border:1px solid #12303f;padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:700;}
+.btn:active{transform:translateY(1px);}
+.small{font-size:13px;color:var(--muted);}
+.control{margin-top:8px;}
+label{font-size:13px;color:#cfe9ff;display:block;margin-bottom:6px;}
+input[type=range]{width:100%;}
+.console{background:rgba(0,0,0,0.12);border-radius:8px;padding:8px;font-family:monospace;color:#9cc3ff;height:120px;overflow:auto;border:1px solid rgba(255,255,255,0.03);}
+.badge{background:var(--glass);padding:6px 8px;border-radius:8px;border:1px solid rgba(255,255,255,0.02);font-weight:700;}
+#gameCanvas{background:linear-gradient(180deg,#031020,#04122a);border-radius:8px;border:1px solid rgba(255,255,255,0.03);width:100%;height:520px;display:block;}
+.footer{margin-top:auto;font-size:12px;color:var(--muted);}
+.rangeVal{float:right;color:var(--muted);font-weight:700;}
+.topRow{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.controlsGrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;}
+.file{display:flex;gap:8px;align-items:center;}
+.status{display:inline-block;padding:6px 8px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);background:var(--glass);}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="left">
+    <h1>IMU Aim — Quick Recenter</h1>
+    <div class="muted">Load <code>calibration.json</code>, connect to IMU, press <b>Quick Recenter</b> and aim the crosshair to score.</div>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="btnWs" class="btn">Connect WS</button>
+      <button id="btnSerial" class="btn">Connect Serial</button>
+      <div style="flex:1"></div>
+      <div id="connBadge" class="badge">Disconnected</div>
+    </div>
+
+    <div class="control">
+      <label>Load calibration.json</label>
+      <div class="file">
+        <input type="file" id="fileCal" accept=".json"/>
+        <button id="btnClearCal" class="btn">Clear</button>
+      </div>
+      <div id="calInfo" class="small" style="margin-top:6px">No calibration loaded.</div>
+    </div>
+
+    <div class="control">
+      <label>Controls</label>
+      <div class="controlsGrid">
+        <div>
+          <label>Sensitivity <span id="sensVal" class="rangeVal">1.0</span></label>
+          <input id="sens" type="range" min="0.2" max="3.0" step="0.05" value="1">
+        </div>
+        <div>
+          <label>Smoothing <span id="smoothVal" class="rangeVal">0.85</span></label>
+          <input id="smooth" type="range" min="0" max="0.98" step="0.01" value="0.85">
+        </div>
+        <div>
+          <label>Deadzone (deg) <span id="dzVal" class="rangeVal">1.5</span></label>
+          <input id="deadzone" type="range" min="0" max="10" step="0.1" value="1.5">
+        </div>
+        <div>
+          <label>Yaw-Pitch Swap</label>
+          <select id="mapMode" style="width:100%;background:#071022;color:#e6eef6;border:1px solid #12303f;padding:6px;border-radius:6px;">
+            <option value="yaw_x_pitch_y">yaw → X, pitch → Y</option>
+            <option value="pitch_x_yaw_y">pitch → X, yaw → Y</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="control" style="margin-top:12px;">
+      <label>Quick Recenter</label>
+      <div class="row">
+        <button id="btnRecenter" class="btn">Quick Recenter</button>
+        <button id="btnResetBaseline" class="btn">Reset Baseline</button>
+        <div style="flex:1"></div>
+        <div id="baseBadge" class="status">Baseline: none</div>
+      </div>
+    </div>
+
+    <div class="control" style="margin-top:12px;">
+      <label>Game Controls</label>
+      <div class="row">
+        <button id="btnStart" class="btn">Start Game</button>
+        <button id="btnStop" class="btn">Stop</button>
+        <div style="flex:1"></div>
+        <div class="small">Score: <span id="score">0</span></div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <div class="small">Live telemetry</div>
+      <div id="tele" class="console">No data yet.</div>
+    </div>
+
+    <div class="footer">Works with IMU packet: <code>{"type":"imu","quat":[w,x,y,z],...}</code>. Use Quick Recenter to set session baseline.</div>
+  </div>
+
+  <div id="right">
+    <div class="topRow">
+      <div>
+        <span class="small">Sample Rate:</span> <span id="hz" class="badge">—</span>
+        <span style="padding-left:10px" class="small">Mode:</span> <span id="modeBadge" class="badge">idle</span>
+      </div>
+      <div>
+        <span class="small">Euler:</span> <span id="eulerBadge" class="badge">—</span>
+      </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div style="margin-top:8px;display:flex;gap:8px;align-items:center;">
+      <div class="small">Raw quat:</div> <div id="rawQuat" class="badge">—</div>
+      <div style="flex:1"></div>
+      <div class="small">Calibrated (deg):</div> <div id="calEuler" class="badge">—</div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* IMU Aim Game with Quick Recenter
+   - Accepts WebSocket (ws://localhost:8766) or Web Serial lines
+   - Expects JSON lines like:
+     {"type":"imu","quat":[w,x,y,z],"acc":[...],"gyro":[...],"t":...}
+   - Load calibration.json (baseline_quaternion optional, R_global optional)
+   - Quick Recenter: sets baseline quaternion q0 = current sample
+   - Mapping: q_rel = conjugate(q0) * q_in ; if R_global in cal, then q_out = q_g * q_rel
+   - Euler from q_out is used (yaw/pitch) mapped to canvas X/Y
+*/
+
+(() => {
+  // DOM
+  const btnWs = document.getElementById('btnWs');
+  const btnSerial = document.getElementById('btnSerial');
+  const connBadge = document.getElementById('connBadge');
+  const tele = document.getElementById('tele');
+  const fileCal = document.getElementById('fileCal');
+  const calInfo = document.getElementById('calInfo');
+  const btnClearCal = document.getElementById('btnClearCal');
+  const sens = document.getElementById('sens');
+  const sensVal = document.getElementById('sensVal');
+  const smooth = document.getElementById('smooth');
+  const smoothVal = document.getElementById('smoothVal');
+  const deadzone = document.getElementById('deadzone');
+  const dzVal = document.getElementById('dzVal');
+  const btnRecenter = document.getElementById('btnRecenter');
+  const btnResetBaseline = document.getElementById('btnResetBaseline');
+  const baseBadge = document.getElementById('baseBadge');
+  const btnStart = document.getElementById('btnStart');
+  const btnStop = document.getElementById('btnStop');
+  const scoreEl = document.getElementById('score');
+  const rawQuat = document.getElementById('rawQuat');
+  const calEuler = document.getElementById('calEuler');
+  const eulerBadge = document.getElementById('eulerBadge');
+  const hzBadge = document.getElementById('hz');
+  const modeBadge = document.getElementById('modeBadge');
+  const mapMode = document.getElementById('mapMode');
+
+  // Canvas
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Runtime state
+  let socket = null;
+  let wsConnected = false;
+  let port = null;
+  let reader = null;
+  let keepReading = false;
+
+  let lastQuat = null; // [w,x,y,z]
+  let lastTime = 0, frames = 0;
+
+  // Calibration state
+  let cal = null;     // loaded calibration JSON
+  let q0 = null;      // baseline quaternion [w,x,y,z] — quick recenter modifies this
+  let qg = null;      // quaternion from R_global if present
+  let useRglobal = false;
+
+  // Smoothing & mapping
+  let smoothing = Number(smooth.value);
+  let sensitivity = Number(sens.value);
+  let deadzoneDeg = Number(deadzone.value);
+  let smoothState = { x: 0, y: 0, initialized: false };
+
+  // Game state
+  let running = false;
+  let score = 0;
+  let target = { x: 0.5, y: 0.5, size: 0.12 }; // relative coords
+  let lastCalEuler = { yaw:0, pitch:0 };
+
+  // Resize canvas
+  function resizeCanvas(){
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = canvas.clientWidth * devicePixelRatio;
+    canvas.height = canvas.clientHeight * devicePixelRatio;
+    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+    draw(); // redraw
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // Utilities: quaternion math (arrays [w,x,y,z])
+  function quatConj(q){ return [q[0], -q[1], -q[2], -q[3]]; }
+  function quatMul(a,b){
+    const w1=a[0], x1=a[1], y1=a[2], z1=a[3];
+    const w2=b[0], x2=b[1], y2=b[2], z2=b[3];
+    return [
+      w1*w2 - x1*x2 - y1*y2 - z1*z2,
+      w1*x2 + x1*w2 + y1*z2 - z1*y2,
+      w1*y2 - x1*z2 + y1*w2 + z1*x2,
+      w1*z2 + x1*y2 - y1*x2 + z1*w2
+    ];
+  }
+  function normalizeQuat(q){
+    const n = Math.hypot(q[0],q[1],q[2],q[3]);
+    if (!isFinite(n) || n < 1e-12) return [1,0,0,0];
+    return [q[0]/n, q[1]/n, q[2]/n, q[3]/n];
+  }
+  function matrixToQuat(R){ // R is 3x3 array
+    const m00=R[0][0], m01=R[0][1], m02=R[0][2];
+    const m10=R[1][0], m11=R[1][1], m12=R[1][2];
+    const m20=R[2][0], m21=R[2][1], m22=R[2][2];
+    const tr = m00 + m11 + m22;
+    let w,x,y,z;
+    if (tr > 0){
+      let S = Math.sqrt(tr+1.0) * 2;
+      w = 0.25 * S;
+      x = (m21 - m12) / S;
+      y = (m02 - m20) / S;
+      z = (m10 - m01) / S;
+    } else if ((m00 > m11) && (m00 > m22)){
+      let S = Math.sqrt(1.0 + m00 - m11 - m22) * 2;
+      w = (m21 - m12) / S;
+      x = 0.25 * S;
+      y = (m01 + m10) / S;
+      z = (m02 + m20) / S;
+    } else if (m11 > m22){
+      let S = Math.sqrt(1.0 + m11 - m00 - m22) * 2;
+      w = (m02 - m20) / S;
+      x = (m01 + m10) / S;
+      y = 0.25 * S;
+      z = (m12 + m21) / S;
+    } else {
+      let S = Math.sqrt(1.0 + m22 - m00 - m11) * 2;
+      w = (m10 - m01) / S;
+      x = (m02 + m20) / S;
+      y = (m12 + m21) / S;
+      z = 0.25 * S;
+    }
+    return normalizeQuat([w,x,y,z]);
+  }
+  function quatToEulerZYX(q){
+    // returns {roll,pitch,yaw} in radians (ZYX order: yaw around Z)
+    const w=q[0], x=q[1], y=q[2], z=q[3];
+    const sinr = 2*(w*x + y*z);
+    const cosr = 1 - 2*(x*x + y*y);
+    const roll = Math.atan2(sinr, cosr);
+    const sinp = 2*(w*y - z*x);
+    let pitch = 0;
+    if (Math.abs(sinp) >= 1) pitch = Math.sign(sinp) * Math.PI/2;
+    else pitch = Math.asin(sinp);
+    const siny = 2*(w*z + x*y);
+    const cosy = 1 - 2*(y*y + z*z);
+    const yaw = Math.atan2(siny, cosy);
+    return { roll, pitch, yaw };
+  }
+
+  // Apply calibration: q_in -> q_out
+  // q0 = baseline [w,x,y,z] or null ; qg = quaternion from R_global or null
+  function applyCalibration(q_in){
+    if (!q_in) return null;
+    let q_rel = q0 ? quatMul(quatConj(q0), q_in) : q_in.slice();
+    q_rel = normalizeQuat(q_rel);
+    let q_out = q_rel;
+    if (qg) q_out = quatMul(qg, q_rel);
+    q_out = normalizeQuat(q_out);
+    return q_out;
+  }
+
+  // Map calibrated quaternion to screen XY (-1..1)
+  function mapQuatToXY(q_out){
+    const e = quatToEulerZYX(q_out); // roll,pitch,yaw
+    lastCalEuler = { yaw: e.yaw, pitch: e.pitch, roll: e.roll };
+    // map yaw->x, pitch->y by selected mode
+    let xVal = 0, yVal = 0;
+    if (mapMode.value === 'yaw_x_pitch_y'){
+      xVal = e.yaw;
+      yVal = e.pitch;
+    } else { // swapped
+      xVal = e.pitch;
+      yVal = e.yaw;
+    }
+    // deadzone in radians
+    const dz = (deadzone.value * Math.PI / 180.0);
+    if (Math.abs(xVal) < dz) xVal = 0;
+    if (Math.abs(yVal) < dz) yVal = 0;
+    // sensitivity (scale radians -> normalized -1..1) use factor
+    const scale = sensitivity; // multiply radians
+    const nx = Math.tanh(xVal * scale); // bound within -1..1 nicely
+    const ny = Math.tanh(yVal * scale);
+    return { x: nx, y: ny, euler: e };
+  }
+
+  // Smoothing (simple EMA)
+  function smoothXY(nx, ny){
+    if (!smoothState.initialized){
+      smoothState.x = nx; smoothState.y = ny; smoothState.initialized = true;
+    } else {
+      const alpha = 1 - smoothing; // smoothing slider is "hold" so invert
+      smoothState.x = alpha * nx + (1 - alpha) * smoothState.x;
+      smoothState.y = alpha * ny + (1 - alpha) * smoothState.y;
+    }
+    return { x: smoothState.x, y: smoothState.y };
+  }
+
+  // Draw function: crosshair and target
+  function draw(){
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    // background subtle grid
+    ctx.fillStyle = "#041526";
+    ctx.fillRect(0,0,w,h);
+    // draw target (relative)
+    const tx = target.x * w, ty = target.y * h;
+    ctx.beginPath();
+    ctx.arc(tx, ty, target.size * Math.min(w,h), 0, Math.PI*2);
+    ctx.fillStyle = "rgba(255,130,120,0.08)";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(255,130,120,0.6)";
+    ctx.stroke();
+
+    // compute crosshair pos from smoothState
+    const sx = (smoothState.x || 0), sy = (smoothState.y || 0);
+    const cx = w/2 + sx * (w/2 * 0.92);
+    const cy = h/2 - sy * (h/2 * 0.92);
+
+    // draw crosshair
+    ctx.strokeStyle = "#78a1ff";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx-12, cy); ctx.lineTo(cx+12, cy);
+    ctx.moveTo(cx, cy-12); ctx.lineTo(cx, cy+12);
+    ctx.stroke();
+    // center dot
+    ctx.fillStyle = "#78a1ff"; ctx.beginPath(); ctx.arc(cx,cy,4,0,Math.PI*2); ctx.fill();
+
+    // info overlay
+    ctx.font = "14px Inter, Arial";
+    ctx.fillStyle = "#9fb3d6";
+    ctx.fillText("Quick Recenter Demo — Move IMU to aim", 12, 18);
+
+    requestAnimationFrame(()=>{});
+  }
+  draw();
+
+  // Simple hit test & scoring
+  function tickGame(){
+    if (!running) return;
+    // check if crosshair inside target
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const cx = w/2 + (smoothState.x || 0) * (w/2 * 0.92);
+    const cy = h/2 - (smoothState.y || 0) * (h/2 * 0.92);
+    const tx = target.x * w, ty = target.y * h;
+    const r = target.size * Math.min(w,h);
+    const d = Math.hypot(cx - tx, cy - ty);
+    if (d < r){
+      score += 1;
+      scoreEl.textContent = score;
+      // move target randomly a bit
+      target.x = 0.2 + Math.random()*0.6;
+      target.y = 0.2 + Math.random()*0.6;
+    }
+    setTimeout(tickGame, 250);
+  }
+
+  // Handle incoming JSON line
+  function handleLine(line){
+    let obj = null;
+    try { obj = JSON.parse(line); } catch(e){ appendTele("non-json: " + line.slice(0,120)); return; }
+    if (!obj) return;
+    if (obj.type === 'imu' && Array.isArray(obj.quat) && obj.quat.length >= 4){
+      // user sends [w,x,y,z] — we assume this by default; if your device uses [x,y,z,w] adjust externally
+      const q = obj.quat.map(Number);
+      if (!q.every(isFinite)) { appendTele("bad numeric quat"); return; }
+      lastQuat = q.slice(0,4);
+      frames++;
+      const now = performance.now();
+      if (now - lastTime >= 1000){
+        const hz = Math.round(frames * 1000 / (now - lastTime));
+        hzBadge.textContent = hz + " Hz";
+        frames = 0; lastTime = now;
+      }
+      rawQuat.textContent = "[" + lastQuat.map(v => v.toFixed(6)).join(", ") + "]";
+      // apply calibration
+      const q_out = applyCalibration(lastQuat);
+      if (!q_out) return;
+      const mapped = mapQuatToXY(q_out);
+      const sm = smoothXY(mapped.x, mapped.y);
+      // update smoothing state
+      smoothing = Number(smooth.value);
+      sensitivity = Number(sens.value);
+      deadzoneDeg = Number(deadzone.value);
+      sensVal.textContent = sensitivity.toFixed(2);
+      smoothVal.textContent = smoothing.toFixed(2);
+      dzVal.textContent = deadzoneDeg.toFixed(1);
+      // update UI euler & telemetry
+      const eDegYaw = (mapped.euler.yaw * 180/Math.PI).toFixed(1);
+      const eDegPitch = (mapped.euler.pitch * 180/Math.PI).toFixed(1);
+      calEuler.textContent = `yaw:${eDegYaw}° pitch:${eDegPitch}°`;
+      eulerBadge.textContent = `Y:${eDegYaw} P:${eDegPitch}`;
+      tele.innerText = `q_out: [${q_out.map(v => v.toFixed(4)).join(", ")}]\n`;
+      // update smoothState directly for drawing
+      smoothState.x = sm.x; smoothState.y = sm.y;
+      // redraw
+      draw();
+    } else {
+      // show generic
+      appendTele(JSON.stringify(obj).slice(0,300));
+    }
+  }
+
+  // Append to telemetry console
+  function appendTele(s){
+    tele.textContent += `[${(new Date()).toLocaleTimeString()}] ${s}\n`;
+    tele.scrollTop = tele.scrollHeight;
+  }
+
+  // WebSocket connect
+  btnWs.addEventListener('click', ()=>{
+    if (wsConnected) { if (socket){ socket.close(); } return; }
+    const url = "ws://localhost:8766";
+    socket = new WebSocket(url);
+    appendTele("WS connecting to " + url);
+    socket.onopen = ()=>{ wsConnected = true; connBadge.textContent = "WS"; connBadge.style.background = "#052"; modeBadge.textContent = "ws"; appendTele("WS connected"); };
+    socket.onmessage = (ev)=>{ handleLine(ev.data); };
+    socket.onclose = ()=>{ wsConnected = false; connBadge.textContent = "Disconnected"; modeBadge.textContent = "idle"; appendTele("WS disconnected"); };
+    socket.onerror = (e)=>{ appendTele("WS error"); };
+  });
+
+  // Web Serial connect
+  btnSerial.addEventListener('click', async ()=>{
+    if (port){ // disconnect
+      keepReading = false;
+      try { await reader.cancel(); } catch(e){}
+      try { await port.close(); } catch(e){}
+      port = null; connBadge.textContent = "Disconnected"; modeBadge.textContent = "idle"; appendTele("Serial closed");
+      return;
+    }
+    try {
+      port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 115200 });
+      connBadge.textContent = "Serial";
+      modeBadge.textContent = "serial";
+      appendTele("Serial opened");
+      const decoder = new TextDecoderStream();
+      const inputDone = port.readable.pipeTo(decoder.writable);
+      reader = decoder.readable.pipeThrough(new TransformStream(new LineBreakTransformer())).getReader();
+      keepReading = true;
+      readSerialLoop();
+    } catch (e){
+      appendTele("Serial error: " + e);
+    }
+  });
+
+  // Transform stream for lines
+  class LineBreakTransformer {
+    constructor(){ this.container = ''; }
+    transform(chunk, controller){
+      this.container += chunk;
+      const lines = this.container.split(/\r?\n/);
+      this.container = lines.pop();
+      lines.forEach(l => controller.enqueue(l));
+    }
+    flush(controller){ if (this.container) controller.enqueue(this.container); }
+  }
+  // Serial read loop
+  async function readSerialLoop(){
+    while (keepReading && reader){
+      try {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) handleLine(value);
+      } catch (e){
+        appendTele("Read error: " + e);
+        break;
+      }
+    }
+    appendTele("Serial reader ended");
+  }
+
+  // File load calibration
+  fileCal.addEventListener('change', (ev)=>{
+    const f = ev.target.files[0];
+    if (!f) return;
+    const readerF = new FileReader();
+    readerF.onload = (e) => {
+      try {
+        cal = JSON.parse(e.target.result);
+        calInfo.textContent = "Loaded calibration.json";
+        if (cal.baseline_quaternion){
+          q0 = cal.baseline_quaternion.slice(0,4);
+          baseBadge.textContent = "Baseline: loaded";
+        }
+        if (cal.R_global){
+          qg = matrixToQuat(cal.R_global);
+          useRglobal = true;
+        } else { qg = null; useRglobal = false; }
+        appendTele("Calibration loaded");
+      } catch (err){
+        appendTele("Bad calibration JSON: " + err);
+      }
+    };
+    readerF.readAsText(f);
+  });
+  btnClearCal.addEventListener('click', ()=>{ cal = null; q0 = null; qg = null; useRglobal = false; calInfo.textContent = "No calibration loaded."; baseBadge.textContent = "Baseline: none"; appendTele("Cleared calibration"); });
+
+  // Quick recenter: set q0 to current sample
+  btnRecenter.addEventListener('click', ()=>{
+    if (!lastQuat){
+      appendTele("No recent sample to recenter.");
+      return;
+    }
+    q0 = lastQuat.slice();
+    baseBadge.textContent = "Baseline: session";
+    appendTele("Quick Recenter set (session baseline).");
+  });
+  btnResetBaseline.addEventListener('click', ()=>{ q0 = null; baseBadge.textContent = "Baseline: none"; appendTele("Baseline reset."); });
+
+  // Game controls
+  btnStart.addEventListener('click', ()=>{ running = true; score = 0; scoreEl.textContent = score; tickGame(); appendTele("Game started"); });
+  btnStop.addEventListener('click', ()=>{ running = false; appendTele("Game stopped"); });
+
+  // For toggles
+  sens.addEventListener('input', ()=>{ sensVal.textContent = Number(sens.value).toFixed(2); });
+  smooth.addEventListener('input', ()=>{ smoothVal.textContent = Number(smooth.value).toFixed(2); });
+  deadzone.addEventListener('input', ()=>{ dzVal.textContent = Number(deadzone.value).toFixed(1); });
+
+  // Helper to append telemetry periodically
+  setInterval(()=>{ // low-rate telemetry
+    if (lastQuat) tele.textContent = `last q: [${lastQuat.map(v=>v.toFixed(4)).join(", ")}]\n`; 
+  }, 1200);
+
+  // Expose apply function for diagnostics
+  window._applyCalibration = applyCalibration;
+
+  // Keyboard quick shortcuts
+  window.addEventListener('keydown', (e)=>{ if (e.key === 'r') btnRecenter.click(); if (e.key === 's') btnStart.click(); if (e.key === 'p') btnStop.click(); });
+
+})();
+</script>
+
+</body>
+</html>

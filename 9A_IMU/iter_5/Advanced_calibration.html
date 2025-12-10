@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Advanced IMU Calibrator (With Range)</title>
+    <style>
+        body { margin: 0; background: #050505; color: #0f0; font-family: 'Consolas', monospace; overflow: hidden; }
+        #hud {
+            position: absolute; top: 0; left: 0; padding: 20px;
+            background: rgba(0, 0, 0, 0.8); border: 1px solid #333; pointer-events: none;
+            width: 300px;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 18px; color: #fff; }
+        .stat-row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; opacity: 0.8; }
+        .val { color: #fff; font-weight: bold; }
+        
+        #controls {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 10px; z-index: 100; flex-wrap: wrap; justify-content: center; width: 90%;
+        }
+        button {
+            background: #002200; color: #0f0; border: 1px solid #0f0; padding: 15px 10px;
+            font-family: inherit; font-size: 13px; cursor: pointer; text-transform: uppercase; min-width: 120px;
+        }
+        button:hover { background: #0f0; color: #000; }
+        button:disabled { border-color: #555; color: #555; background: #111; cursor: default; }
+        
+        #range-bar-container {
+            margin-top: 10px; border-top: 1px solid #333; padding-top: 10px;
+        }
+        .range-bar { height: 4px; background: #333; margin-bottom: 5px; position: relative; }
+        .range-fill { height: 100%; background: #0f0; position: absolute; width: 0%; left: 50%; transition: width 0.1s, left 0.1s; }
+        
+        #file-input { display: none; }
+    </style>
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+</head>
+<body>
+
+<div id="hud">
+    <h1>IMU CONFIGURATOR</h1>
+    <div id="status" style="color:yellow; margin-bottom:10px;">DISCONNECTED</div>
+    
+    <div class="stat-row"><span>Yaw Axis:</span> <span id="val-yaw-axis" class="val">PENDING</span></div>
+    <div class="stat-row"><span>Pitch Axis:</span> <span id="val-pitch-axis" class="val">PENDING</span></div>
+    <div style="height:10px"></div>
+    <div class="stat-row"><span>Current Yaw:</span> <span id="val-curr-yaw" class="val">0.0°</span></div>
+    <div class="stat-row"><span>Current Pitch:</span> <span id="val-curr-pitch" class="val">0.0°</span></div>
+    
+    <div id="range-bar-container">
+        <div style="font-size:11px; color:#aaa; margin-bottom:2px;">RECORDED RANGE (Red = Limits)</div>
+        <div class="stat-row"><span>Max Left:</span> <span id="val-min-yaw" class="val">0°</span></div>
+        <div class="range-bar"><div id="bar-yaw" class="range-fill"></div></div>
+        <div class="stat-row"><span>Max Right:</span> <span id="val-max-yaw" class="val">0°</span></div>
+        
+        <div style="height:5px"></div>
+        
+        <div class="stat-row"><span>Max Up:</span> <span id="val-min-pitch" class="val">0°</span></div>
+        <div class="range-bar"><div id="bar-pitch" class="range-fill"></div></div>
+        <div class="stat-row"><span>Max Down:</span> <span id="val-max-pitch" class="val">0°</span></div>
+    </div>
+</div>
+
+<div id="controls">
+    <button id="btn-connect">1. Connect</button>
+    <button id="btn-cal-yaw" disabled>2a. Scan Yaw</button>
+    <button id="btn-cal-pitch" disabled>2b. Scan Pitch</button>
+    <button id="btn-cal-range" disabled>3. Measure Range</button>
+    
+    <button id="btn-import" disabled>Load JSON</button>
+    <input type="file" id="file-input" accept=".json">
+    <button id="btn-recenter" disabled>Recenter (Space)</button>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// =========================================================
+// 1. ROBUST MATH ENGINE (Updated with Range Logic)
+// =========================================================
+class RobustSolver {
+    constructor() {
+        // Axes
+        this.yawAxis = new THREE.Vector3(0, 1, 0);
+        this.pitchAxis = new THREE.Vector3(1, 0, 0);
+        this.axisSamples = [];
+        this.isCalibratingAxes = false;
+        
+        // State
+        this.tareQuat = new THREE.Quaternion();
+        this.currentQuat = new THREE.Quaternion();
+        
+        // Settings
+        this.pitchMultiplier = 1.0;
+        this.yawMultiplier = 1.0;
+        
+        // Range Data (in Radians)
+        this.range = {
+            minYaw: -0.5, // Default ~28 degrees
+            maxYaw: 0.5,
+            minPitch: -0.5,
+            maxPitch: 0.5
+        };
+        this.isCalibratingRange = false;
+    }
+
+    // --- STREAM PROCESSING ---
+    processStream(w, x, y, z) {
+        this.currentQuat.set(x, y, z, w).normalize();
+    }
+    
+    recenter() {
+        this.tareQuat.copy(this.currentQuat);
+    }
+
+    // --- ANGLE CALCULATION ---
+    getAngles() {
+        const delta = new THREE.Quaternion().copy(this.tareQuat).invert().multiply(this.currentQuat);
+        const w = Math.max(-1, Math.min(1, delta.w));
+        const angle = 2 * Math.acos(w);
+        
+        if (Math.abs(angle) < 0.001) return { yaw: 0, pitch: 0 };
+        
+        const s = Math.sqrt(1 - w*w);
+        let axis = new THREE.Vector3(delta.x, delta.y, delta.z).divideScalar(s);
+        
+        const yawContribution = axis.dot(this.yawAxis);
+        const pitchContribution = axis.dot(this.pitchAxis);
+        
+        let yaw = angle * yawContribution * this.yawMultiplier;
+        let pitch = angle * pitchContribution * this.pitchMultiplier;
+        
+        // If measuring range, update limits
+        if (this.isCalibratingRange) {
+            if (yaw < this.range.minYaw) this.range.minYaw = yaw;
+            if (yaw > this.range.maxYaw) this.range.maxYaw = yaw;
+            if (pitch < this.range.minPitch) this.range.minPitch = pitch;
+            if (pitch > this.range.maxPitch) this.range.maxPitch = pitch;
+        }
+
+        return { yaw, pitch };
+    }
+
+    // --- AXIS CALIBRATION ---
+    startAxisScan() {
+        this.axisSamples = [];
+        this.isCalibratingAxes = true;
+    }
+
+    stopAxisScan() {
+        this.isCalibratingAxes = false;
+        if (this.axisSamples.length === 0) return new THREE.Vector3(0,1,0);
+        let mean = new THREE.Vector3(0,0,0);
+        for(let v of this.axisSamples) mean.add(v);
+        mean.normalize();
+        return mean;
+    }
+
+    sampleCalibrationFrame() {
+        if (!this.isCalibratingAxes) return;
+        const delta = new THREE.Quaternion().copy(this.tareQuat).invert().multiply(this.currentQuat);
+        const theta = 2 * Math.acos(delta.w);
+        if (theta > 0.1) {
+            const s = Math.sqrt(1 - delta.w * delta.w);
+            if (s > 0.001) {
+                const axis = new THREE.Vector3(delta.x/s, delta.y/s, delta.z/s);
+                if (this.axisSamples.length > 0 && axis.dot(this.axisSamples[0]) < 0) axis.negate();
+                this.axisSamples.push(axis);
+            }
+        }
+    }
+
+    setAxes(yaw, pitch) {
+        this.yawAxis.copy(yaw).normalize();
+        this.pitchAxis.copy(pitch).normalize();
+    }
+
+    // --- RANGE CALIBRATION ---
+    startRangeScan() {
+        // Reset range to very small values so we can grow them
+        this.range = { minYaw: 0.1, maxYaw: -0.1, minPitch: 0.1, maxPitch: -0.1 };
+        this.isCalibratingRange = true;
+    }
+
+    stopRangeScan() {
+        this.isCalibratingRange = false;
+        // Safety: Ensure min is actually less than max (in case user didn't move)
+        if (this.range.minYaw > this.range.maxYaw) { this.range.minYaw = -0.5; this.range.maxYaw = 0.5; }
+        if (this.range.minPitch > this.range.maxPitch) { this.range.minPitch = -0.5; this.range.maxPitch = 0.5; }
+    }
+
+    // --- LOAD/SAVE ---
+    loadProfile(json) {
+        this.yawAxis.set(json.yawAxis.x, json.yawAxis.y, json.yawAxis.z);
+        this.pitchAxis.set(json.pitchAxis.x, json.pitchAxis.y, json.pitchAxis.z);
+        this.yawMultiplier = json.yawMultiplier;
+        this.pitchMultiplier = json.pitchMultiplier;
+        // Load Range if it exists, otherwise default
+        if (json.range) this.range = json.range;
+    }
+
+    exportProfile() {
+        return {
+            yawAxis: this.yawAxis,
+            pitchAxis: this.pitchAxis,
+            yawMultiplier: this.yawMultiplier,
+            pitchMultiplier: this.pitchMultiplier,
+            range: this.range // EXPORT RANGE DATA
+        };
+    }
+}
+
+const solver = new RobustSolver();
+
+// =========================================================
+// 2. THREE.JS VISUALIZATION
+// =========================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050505);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+camera.position.set(0, 0, 8);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const grid = new THREE.GridHelper(50, 50, 0x111111, 0x111111);
+scene.add(grid);
+
+// --- VISUALS ---
+// 1. The Pointer (Represents User)
+const pointerGeo = new THREE.ConeGeometry(0.2, 1, 16);
+pointerGeo.rotateX(Math.PI/2); 
+const pointerMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+const pointer = new THREE.Mesh(pointerGeo, pointerMat);
+scene.add(pointer);
+
+// 2. The Range Box (Represents Limits)
+// We will scale this box dynamically during range calibration
+const rangeBoxGeo = new THREE.BoxGeometry(1, 1, 1);
+const rangeBoxMat = new THREE.MeshBasicMaterial({ 
+    color: 0xff0000, 
+    wireframe: true, 
+    transparent: true, 
+    opacity: 0.3 
+});
+const rangeBox = new THREE.Mesh(rangeBoxGeo, rangeBoxMat);
+// Invert normals so we see it from inside (optional, but good for wireframe)
+scene.add(rangeBox);
+
+// =========================================================
+// 3. UI & LOGIC
+// =========================================================
+let port, keepReading = false;
+let capturedYawAxis = null;
+let capturedPitchAxis = null;
+
+// UTILS
+const RAD2DEG = 57.2958;
+
+function updateHUD(angles) {
+    document.getElementById('val-curr-yaw').innerText = (angles.yaw * RAD2DEG).toFixed(1) + "°";
+    document.getElementById('val-curr-pitch').innerText = (angles.pitch * RAD2DEG).toFixed(1) + "°";
+
+    // Update Range Stats
+    const r = solver.range;
+    document.getElementById('val-min-yaw').innerText = (r.minYaw * RAD2DEG).toFixed(1) + "°";
+    document.getElementById('val-max-yaw').innerText = (r.maxYaw * RAD2DEG).toFixed(1) + "°";
+    document.getElementById('val-min-pitch').innerText = (r.minPitch * RAD2DEG).toFixed(1) + "°";
+    document.getElementById('val-max-pitch').innerText = (r.maxPitch * RAD2DEG).toFixed(1) + "°";
+    
+    // Update Progress Bars
+    // Assuming a generic visual range of -60 to +60 degrees for the bar width
+    const maxVisual = 60 * (Math.PI/180);
+    
+    // Pitch Bar (Up/Down)
+    const pPercent = Math.max(-1, Math.min(1, angles.pitch / maxVisual)) * 50;
+    const pBar = document.getElementById('bar-pitch');
+    pBar.style.left = (50 + Math.min(0, pPercent)) + "%";
+    pBar.style.width = Math.abs(pPercent) + "%";
+    
+    // Yaw Bar (Left/Right)
+    const yPercent = Math.max(-1, Math.min(1, angles.yaw / maxVisual)) * 50;
+    const yBar = document.getElementById('bar-yaw');
+    yBar.style.left = (50 + Math.min(0, yPercent)) + "%";
+    yBar.style.width = Math.abs(yPercent) + "%";
+}
+
+// HANDLERS
+document.getElementById('btn-connect').onclick = async () => {
+    try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        keepReading = true;
+        readLoop();
+        document.getElementById('status').innerText = "CONNECTED";
+        document.getElementById('status').style.color = "#0f0";
+        document.getElementById('btn-connect').disabled = true;
+        document.getElementById('btn-cal-yaw').disabled = false;
+        document.getElementById('btn-import').disabled = false;
+    } catch(e) { alert(e); }
+};
+
+// --- AXIS CALIBRATION ---
+const btnYaw = document.getElementById('btn-cal-yaw');
+btnYaw.onclick = () => {
+    if (!solver.isCalibratingAxes) {
+        solver.recenter();
+        solver.startAxisScan();
+        btnYaw.innerText = "Stop Scanning";
+        btnYaw.style.background = "#990000";
+    } else {
+        capturedYawAxis = solver.stopAxisScan();
+        document.getElementById('val-yaw-axis').innerText = "SET";
+        btnYaw.innerText = "Yaw Done";
+        btnYaw.disabled = true;
+        btnYaw.style.background = "";
+        document.getElementById('btn-cal-pitch').disabled = false;
+    }
+};
+
+const btnPitch = document.getElementById('btn-cal-pitch');
+btnPitch.onclick = () => {
+    if (!solver.isCalibratingAxes) {
+        solver.recenter();
+        solver.startAxisScan();
+        btnPitch.innerText = "Stop Scanning";
+        btnPitch.style.background = "#990000";
+    } else {
+        capturedPitchAxis = solver.stopAxisScan();
+        solver.setAxes(capturedYawAxis, capturedPitchAxis);
+        document.getElementById('val-pitch-axis').innerText = "SET";
+        btnPitch.innerText = "Pitch Done";
+        btnPitch.disabled = true;
+        btnPitch.style.background = "";
+        document.getElementById('btn-recenter').disabled = false;
+        document.getElementById('btn-cal-range').disabled = false; // Enable Range Cal
+        createExtraButtons();
+    }
+};
+
+// --- RANGE CALIBRATION ---
+const btnRange = document.getElementById('btn-cal-range');
+btnRange.onclick = () => {
+    if (!solver.isCalibratingRange) {
+        solver.recenter(); // Good practice to zero out before stretching
+        solver.startRangeScan();
+        btnRange.innerText = "Push Limits (Move All Directions)";
+        btnRange.style.background = "#aa5500";
+        document.getElementById('status').innerText = "CALIBRATING RANGE: MOVE TO LIMITS";
+        
+        // Visual cue
+        rangeBox.material.color.setHex(0xffff00);
+        rangeBox.material.opacity = 0.5;
+    } else {
+        solver.stopRangeScan();
+        btnRange.innerText = "Range Saved";
+        btnRange.disabled = true;
+        btnRange.style.background = "";
+        document.getElementById('status').innerText = "CALIBRATION COMPLETE";
+        
+        // Visual cue
+        rangeBox.material.color.setHex(0x0000ff);
+        rangeBox.material.opacity = 0.2;
+    }
+};
+
+document.getElementById('btn-recenter').onclick = () => solver.recenter();
+window.addEventListener('keydown', (e) => { if(e.code === 'Space') solver.recenter(); });
+
+// --- EXPORT/IMPORT ---
+function createExtraButtons() {
+    const container = document.getElementById('controls');
+    if(document.getElementById('btn-save')) return;
+    
+    // Inverters
+    const invDiv = document.createElement('div');
+    invDiv.style.width="100%"; invDiv.style.textAlign="center"; invDiv.style.marginTop="5px";
+    
+    const mkBtn = (txt, fn) => {
+        const b = document.createElement('button'); b.innerText = txt; b.onclick = fn; 
+        b.style.padding="5px"; b.style.minWidth="80px"; b.style.margin="0 5px";
+        return b;
+    };
+    
+    invDiv.appendChild(mkBtn("Inv Pitch", () => solver.pitchMultiplier *= -1));
+    invDiv.appendChild(mkBtn("Inv Yaw", () => solver.yawMultiplier *= -1));
+    container.appendChild(invDiv);
+
+    // Save
+    const saveBtn = document.createElement('button');
+    saveBtn.id = 'btn-save';
+    saveBtn.innerText = "SAVE FULL PROFILE";
+    saveBtn.style.background = "#004400";
+    saveBtn.style.marginTop = "10px";
+    saveBtn.onclick = () => {
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(solver.exportProfile()));
+        const dlAnchor = document.createElement('a');
+        dlAnchor.setAttribute("href", dataStr);
+        dlAnchor.setAttribute("download", "imu_profile_full.json");
+        dlAnchor.click();
+    };
+    container.appendChild(saveBtn);
+}
+
+const btnImport = document.getElementById('btn-import');
+const fileInput = document.getElementById('file-input');
+btnImport.onclick = () => fileInput.click();
+fileInput.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        solver.loadProfile(JSON.parse(event.target.result));
+        document.getElementById('status').innerText = "PROFILE LOADED";
+        btnImport.innerText = "Loaded";
+        document.getElementById('btn-recenter').disabled = false;
+        createExtraButtons();
+        // Skip calibration buttons
+        document.getElementById('btn-cal-yaw').disabled = true;
+        document.getElementById('btn-cal-pitch').disabled = true;
+        document.getElementById('btn-cal-range').disabled = true;
+    };
+    reader.readAsText(file);
+};
+
+// =========================================================
+// 4. ANIMATION LOOP
+// =========================================================
+function animate() {
+    requestAnimationFrame(animate);
+    
+    if (solver.isCalibratingAxes) solver.sampleCalibrationFrame();
+
+    const angles = solver.getAngles();
+    updateHUD(angles);
+
+    // --- VISUALIZATION ---
+    // 1. Move Pointer based on Yaw/Pitch
+    // Convert spherical coordinates roughly to position for visualization
+    // Or just simple rotation
+    pointer.rotation.x = -angles.pitch;
+    pointer.rotation.y = -angles.yaw;
+    
+    // 2. Update Range Box Size
+    // The box represents the limits. 
+    // Width = Yaw Range, Height = Pitch Range
+    const yawSpan = solver.range.maxYaw - solver.range.minYaw;
+    const pitchSpan = solver.range.maxPitch - solver.range.minPitch;
+    const yawCenter = (solver.range.maxYaw + solver.range.minYaw) / 2;
+    const pitchCenter = (solver.range.maxPitch + solver.range.minPitch) / 2;
+    
+    // We visualize the range as a box at distance 5
+    // Width ~= span * distance
+    rangeBox.scale.set(Math.max(0.1, yawSpan * 5), Math.max(0.1, pitchSpan * 5), 1);
+    
+    // Position the box so it aligns with the center of the user's range
+    // (If user can only turn left, the box should be on the left)
+    // Note: angles are radians. 
+    rangeBox.position.x = -yawCenter * 5; 
+    rangeBox.position.y = -pitchCenter * 5;
+    rangeBox.position.z = -5;
+    
+    renderer.render(scene, camera);
+}
+animate();
+
+// =========================================================
+// 5. SERIAL READER
+// =========================================================
+async function readLoop() {
+    const textDecoder = new TextDecoderStream();
+    port.readable.pipeTo(textDecoder.writable);
+    const reader = textDecoder.readable.getReader();
+    let buffer = "";
+    while (keepReading) {
+        try {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += value;
+            const lines = buffer.split('\n');
+            buffer = lines.pop(); 
+            for (const line of lines) {
+                try {
+                    const json = JSON.parse(line.trim());
+                    if (json.type === "imu" && json.quat) solver.processStream(...json.quat);
+                } catch(e) {}
+            }
+        } catch (error) { break; }
+    }
+}
+window.onresize = () => {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+};
+</script>
+</body>
+</html>

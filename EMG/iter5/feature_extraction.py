@@ -6,13 +6,13 @@ import os
 
 # Pattern to match all your input streams
 # e.g., labeled_stream_1.csv, labeled_stream_2.csv, labeled_stream_2class.csv, etc.
-INPUT_PATTERN = "labeled_stream_2class_shaurya_noisy.csv"
+INPUT_PATTERN = "labeled_stream_2class_anirudh_randomnoise.csv"
 
 # Output combined features file
-OUTPUT_CSV = "emg_features_combined_2class_noisy.csv"
+OUTPUT_CSV = "emg_features_combined_2class_anirudh_randomnoise.csv"
 
 # ==== EMG SETTINGS (time-based, independent of exact fs) ====
-window_sec = 0.2     # 200 ms window
+window_sec = 0.198    # 200 ms window
 step_sec   = 0.05     # 50 ms step
 
 def extract_features_from_window(x: np.ndarray) -> dict:
