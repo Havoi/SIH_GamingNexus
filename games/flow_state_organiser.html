@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Flow State Organizer | Range Adaptive</title>
+    <style>
+        body { margin: 0; background: #1a1a1a; overflow: hidden; font-family: "Segoe UI", sans-serif; user-select: none; }
+
+        /* UI OVERLAY */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; }
+
+        /* HEADER */
+        #header {
+            padding: 20px; display: flex; justify-content: space-between; align-items: flex-start;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent); color: white;
+        }
+        .score-box { font-size: 32px; font-weight: bold; text-shadow: 0 0 10px rgba(0,255,255,0.5); }
+        .sub-text { font-size: 14px; opacity: 0.8; }
+        
+        #priority-display { font-size: 24px; font-weight: bold; margin-top: 5px; text-align: right; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
+
+        /* MENUS */
+        #menu-container {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 100%; display: flex; justify-content: center; pointer-events: auto; z-index: 10;
+        }
+        .panel {
+            background: rgba(30, 30, 30, 0.95); border: 1px solid #444; padding: 30px; border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5); text-align: center; color: #eee; max-width: 400px; display: none;
+        }
+        .panel.active { display: block; }
+        h2 { margin-top: 0; color: #00bcd4; }
+        p { color: #aaa; margin-bottom: 20px; }
+
+        /* BUTTONS */
+        button {
+            background: #00bcd4; color: black; border: none; padding: 12px 25px; font-size: 16px; font-weight: bold;
+            border-radius: 4px; cursor: pointer; margin: 5px; transition: 0.2s;
+        }
+        button:hover { background: #00e5ff; transform: scale(1.05); }
+        button:disabled { background: #555; color: #888; transform: none; cursor: default; }
+
+        /* CONTROLS BAR */
+        #controls-bar {
+            padding: 20px; background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+            pointer-events: auto; color: white; display: flex; gap: 20px; align-items: flex-end;
+        }
+        
+        .control-block { display: flex; flex-direction: column; gap: 5px; }
+        label { font-size: 10px; font-weight: bold; color: #00bcd4; text-transform: uppercase; }
+        input[type="range"] { accent-color: #00bcd4; width: 120px; cursor: pointer; }
+
+        .toggle-btn { background: #333; color: #aaa; border: 1px solid #555; padding: 6px 12px; font-size: 11px; }
+        .toggle-btn.active { background: #00bcd4; color: black; border-color: #00bcd4; }
+        .toggle-btn.inverted { background: #ff5252; color: white; border-color: #ff5252; }
+
+        /* SATURATION BARS */
+        .sat-wrapper { width: 120px; margin-right: 20px; }
+        .sat-track { width: 100%; height: 6px; background: #333; margin-top: 4px; position: relative; border-radius: 3px; overflow: hidden; }
+        .sat-fill { width: 0%; height: 100%; background: #ffeb3b; position: absolute; left: 50%; transition: width 0.05s, left 0.05s; }
+        
+        input[type="file"] { display: none; }
+    </style>
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+</head>
+<body>
+
+<div id="game-container"></div>
+
+<div id="ui-layer">
+    <div id="header">
+        <div>
+            <div class="score-box">SCORE: <span id="score-val">0</span></div>
+            <div class="sub-text" id="status-text">WAITING...</div>
+        </div>
+        <div style="text-align: right">
+            <div id="priority-display">TARGET: <span id="target-name">--</span></div>
+            <div class="sub-text">FLOW ORGANIZER</div>
+        </div>
+    </div>
+
+    <div id="menu-container">
+        <div id="screen-connect" class="panel active">
+            <h2>Welcome</h2>
+            <p>Connect your IMU to begin organization training.</p>
+            <button id="btn-connect">Connect Sensor</button>
+        </div>
+
+        <div id="screen-load" class="panel">
+            <h2>Load Calibration</h2>
+            <p>Load your range profile to map movements correctly.</p>
+            <button id="btn-load-trigger">Load JSON</button>
+            <input type="file" id="file-input" accept=".json">
+        </div>
+
+        <div id="screen-play" class="panel">
+            <h2>Ready</h2>
+            <p>Sort items into lanes.<br>Match the TARGET color.</p>
+            <button id="btn-start">Start Organizing</button>
+        </div>
+        
+        <div id="screen-over" class="panel">
+            <h2>Session Complete</h2>
+            <p>Final Score: <span id="final-score">0</span></p>
+            <button id="btn-restart">Play Again</button>
+        </div>
+    </div>
+
+    <div id="controls-bar">
+        <div class="sat-wrapper">
+            <label>Range Usage (Yaw)</label>
+            <div class="sat-track"><div id="sat-yaw" class="sat-fill"></div></div>
+        </div>
+
+        <div class="control-block">
+            <label>Sensitivity: <span id="val-sens">1.0</span></label>
+            <input type="range" id="input-sens" min="0.5" max="3.0" step="0.1" value="1.0">
+        </div>
+        <div class="control-block">
+            <label>Flow Speed: <span id="val-speed">0.3</span></label>
+            <input type="range" id="input-speed" min="0.1" max="0.8" step="0.05" value="0.3">
+        </div>
+
+        <div class="control-block" style="flex-direction: row; gap: 5px;">
+            <button id="btn-inv-yaw" class="toggle-btn active">Yaw: Normal</button>
+        </div>
+
+        <button id="btn-recenter" style="margin-left: auto; background: rgba(255,255,255,0.1); border: 1px solid #777; color: #fff;">Recenter (Space)</button>
+    </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// =========================================================
+// 1. RANGE ADAPTIVE SOLVER
+// =========================================================
+class RangeAdaptiveSolver {
+    constructor() {
+        this.yawAxis = new THREE.Vector3(0, 1, 0);
+        this.pitchAxis = new THREE.Vector3(1, 0, 0);
+        this.baseYawMult = 1.0;
+        this.basePitchMult = 1.0;
+        this.userYawInv = 1.0;
+        this.sensitivity = 1.0;
+        this.smoothing = 0.15;
+
+        this.range = { minYaw: -0.5, maxYaw: 0.5 }; // Only need Yaw for this game
+        this.tareQuat = new THREE.Quaternion();
+        this.currentQuat = new THREE.Quaternion();
+        this.targetQuat = new THREE.Quaternion();
+        this.saturation = 0;
+    }
+
+    loadProfile(json) {
+        this.yawAxis.set(json.yawAxis.x, json.yawAxis.y, json.yawAxis.z);
+        this.pitchAxis.set(json.pitchAxis.x, json.pitchAxis.y, json.pitchAxis.z); // Kept for structure
+        this.baseYawMult = json.yawMultiplier || 1.0;
+        if (json.range) this.range = json.range;
+    }
+
+    toggleYawInversion() { this.userYawInv *= -1; return this.userYawInv === 1; }
+
+    updateRaw(w, x, y, z) {
+        this.targetQuat.set(x, y, z, w).normalize();
+    }
+    
+    updateSmoothing() {
+        this.currentQuat.slerp(this.targetQuat, this.smoothing);
+    }
+
+    recenter() {
+        this.tareQuat.copy(this.currentQuat);
+    }
+
+    // Returns normalized X (-1 to 1)
+    getInput() {
+        const delta = new THREE.Quaternion().copy(this.tareQuat).invert().multiply(this.currentQuat);
+        const w = Math.max(-1, Math.min(1, delta.w));
+        const angle = 2 * Math.acos(w);
+        
+        if (Math.abs(angle) < 0.0001) return 0;
+
+        const s = Math.sqrt(1 - w*w);
+        const axis = new THREE.Vector3(delta.x, delta.y, delta.z).divideScalar(s);
+        
+        // 1. Raw Angle
+        let rawYaw = angle * axis.dot(this.yawAxis) * this.baseYawMult * this.userYawInv;
+
+        // 2. Map Range
+        let normYaw = this.mapRange(rawYaw, this.range.minYaw, this.range.maxYaw, -1, 1);
+        
+        this.saturation = normYaw; // Update UI data
+
+        // 3. Apply Sensitivity & Invert X (Yaw Left moves Left)
+        return -normYaw * this.sensitivity; 
+    }
+
+    mapRange(val, inMin, inMax, outMin, outMax) {
+        const clampedVal = Math.max(inMin, Math.min(val, inMax));
+        return (clampedVal - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
+    }
+}
+
+const solver = new RangeAdaptiveSolver();
+
+// =========================================================
+// 2. VISUALS (THREE.JS)
+// =========================================================
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+scene.fog = new THREE.FogExp2(0x111111, 0.04);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 100);
+camera.position.set(0, 3, 6);
+camera.lookAt(0, 0, -5);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+document.getElementById('game-container').appendChild(renderer.domElement);
+
+// LIGHTS
+const ambLight = new THREE.AmbientLight(0xffffff, 0.3);
+scene.add(ambLight);
+const spotLight = new THREE.SpotLight(0xffffff, 1);
+spotLight.position.set(0, 15, 5);
+spotLight.castShadow = true;
+scene.add(spotLight);
+
+// LANES
+const LANE_X = [-2.5, 0, 2.5]; // Left, Center, Right positions
+const laneGeo = new THREE.PlaneGeometry(10, 200);
+const laneMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
+const floor = new THREE.Mesh(laneGeo, laneMat);
+floor.rotation.x = -Math.PI/2;
+floor.position.y = -1;
+scene.add(floor);
+
+// Dividers
+const divGeo = new THREE.BoxGeometry(0.1, 0.1, 200);
+const divMat = new THREE.MeshBasicMaterial({ color: 0x444444 });
+const div1 = new THREE.Mesh(divGeo, divMat); div1.position.set(-1.25, -0.9, -50); scene.add(div1);
+const div2 = new THREE.Mesh(divGeo, divMat); div2.position.set(1.25, -0.9, -50); scene.add(div2);
+
+// PLAYER (The Bin)
+const playerGroup = new THREE.Group();
+const binGeo = new THREE.BoxGeometry(1.5, 0.5, 1.5);
+// Bin colors visual
+const binMat = new THREE.MeshStandardMaterial({ color: 0x333333, emissive: 0x00bcd4, emissiveIntensity: 0.5 });
+const binMesh = new THREE.Mesh(binGeo, binMat);
+playerGroup.add(binMesh);
+scene.add(playerGroup);
+
+// RESOURCES
+const resources = [];
+const resGeo = new THREE.IcosahedronGeometry(0.5, 0);
+const COLORS = [0xff0055, 0x0055ff, 0xffaa00]; // Red, Blue, Yellow
+const NAMES = ["RED", "BLUE", "YELLOW"];
+
+function spawnResource() {
+    const laneIdx = Math.floor(Math.random() * 3);
+    const colorIdx = Math.floor(Math.random() * 3);
+    const mat = new THREE.MeshStandardMaterial({ 
+        color: COLORS[colorIdx], emissive: COLORS[colorIdx], emissiveIntensity: 0.8 
+    });
+    
+    const mesh = new THREE.Mesh(resGeo, mat);
+    mesh.position.set(LANE_X[laneIdx], 0, -60);
+    mesh.castShadow = true;
+    
+    scene.add(mesh);
+    resources.push({ mesh: mesh, colorIdx: colorIdx, active: true });
+}
+
+// =========================================================
+// 3. GAME LOGIC
+// =========================================================
+let gameState = "SETUP";
+let score = 0;
+let gameSpeed = 0.3;
+let currentTargetIdx = 0;
+let targetTimer = 0;
+
+function updateGameLogic() {
+    if (gameState !== "PLAYING") return;
+
+    // 1. Player Movement (Range Adaptive)
+    // The Input is -1 (Full Left) to 1 (Full Right)
+    const inputX = solver.getInput();
+    
+    // Map -1/1 to Screen Limits (-3 to 3)
+    let targetX = inputX * 3.5;
+    
+    // Smooth Lerp
+    playerGroup.position.x += (targetX - playerGroup.position.x) * 0.15;
+    
+    // Determine Current Lane for Logic (Visual feedback only)
+    let currentLane = 0; // Center
+    if (playerGroup.position.x < -1.25) currentLane = 0; // Left (Map index 0)
+    else if (playerGroup.position.x > 1.25) currentLane = 2; // Right (Map index 2)
+    else currentLane = 1; // Center
+
+    // 2. Resource Movement
+    if (Math.random() < 0.015) spawnResource();
+
+    for (let i = resources.length - 1; i >= 0; i--) {
+        const r = resources[i];
+        r.mesh.position.z += gameSpeed;
+        r.mesh.rotation.x += 0.05;
+        r.mesh.rotation.y += 0.05;
+
+        // Collision
+        if (r.active && r.mesh.position.z > -1.0 && r.mesh.position.z < 1.0) {
+            // Check lateral distance
+            if (Math.abs(r.mesh.position.x - playerGroup.position.x) < 1.0) {
+                // CAUGHT!
+                if (r.colorIdx === currentTargetIdx) {
+                    score += 50;
+                    document.getElementById('status-text').innerText = "+50 MATCH!";
+                    document.getElementById('status-text').style.color = "#0f0";
+                } else {
+                    score -= 20;
+                    document.getElementById('status-text').innerText = "-20 WRONG!";
+                    document.getElementById('status-text').style.color = "#f00";
+                }
+                document.getElementById('score-val').innerText = score;
+                
+                scene.remove(r.mesh);
+                resources.splice(i, 1);
+                r.active = false;
+                continue;
+            }
+        }
+
+        // Missed
+        if (r.mesh.position.z > 5) {
+            if (r.active && r.colorIdx === currentTargetIdx) {
+                score -= 10;
+                document.getElementById('score-val').innerText = score;
+                document.getElementById('status-text').innerText = "MISSED TARGET";
+                 document.getElementById('status-text').style.color = "#ffaa00";
+            }
+            scene.remove(r.mesh);
+            resources.splice(i, 1);
+        }
+    }
+
+    // 3. Priority Switch
+    if (Date.now() - targetTimer > 8000) {
+        let newIdx = Math.floor(Math.random() * 3);
+        while(newIdx === currentTargetIdx) newIdx = Math.floor(Math.random() * 3);
+        
+        currentTargetIdx = newIdx;
+        targetTimer = Date.now();
+        
+        const el = document.getElementById('target-name');
+        el.innerText = NAMES[currentTargetIdx];
+        el.style.color = "#" + COLORS[currentTargetIdx].toString(16);
+        
+        // Visual indicator on player
+        binMat.emissive.setHex(COLORS[currentTargetIdx]);
+    }
+
+    // 4. Update UI Bars
+    const yawP = solver.saturation * 50;
+    const bar = document.getElementById('sat-yaw');
+    bar.style.left = (50 + Math.min(0, yawP)) + "%";
+    bar.style.width = Math.abs(yawP) + "%";
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    solver.updateSmoothing();
+    updateGameLogic();
+    renderer.render(scene, camera);
+}
+animate();
+
+// =========================================================
+// 4. UI HANDLERS
+// =========================================================
+let port, keepReading = false;
+const screens = ['screen-connect', 'screen-load', 'screen-play', 'screen-over'];
+
+function switchScreen(id) {
+    screens.forEach(s => document.getElementById(s).classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+}
+
+document.getElementById('btn-connect').onclick = async () => {
+    try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        keepReading = true;
+        readLoop();
+        document.getElementById('status-text').innerText = "CONNECTED";
+        switchScreen('screen-load');
+    } catch (e) { alert("Connection Error"); }
+};
+
+document.getElementById('btn-load-trigger').onclick = () => document.getElementById('file-input').click();
+document.getElementById('file-input').onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+        try {
+            solver.loadProfile(JSON.parse(evt.target.result));
+            switchScreen('screen-play');
+        } catch (err) { alert("Invalid File"); }
+    };
+    reader.readAsText(file);
+};
+
+document.getElementById('btn-start').onclick = () => {
+    solver.recenter();
+    document.getElementById('menu-container').style.display = 'none';
+    gameState = "PLAYING";
+    targetTimer = Date.now();
+};
+
+document.getElementById('btn-restart').onclick = () => {
+    score = 0; document.getElementById('score-val').innerText = "0";
+    resources.forEach(r => scene.remove(r.mesh));
+    resources.length = 0;
+    switchScreen('screen-play');
+    document.getElementById('menu-container').style.display = 'flex';
+};
+
+// Controls
+document.getElementById('input-sens').oninput = (e) => {
+    solver.sensitivity = parseFloat(e.target.value);
+    document.getElementById('val-sens').innerText = solver.sensitivity.toFixed(1);
+};
+document.getElementById('input-speed').oninput = (e) => {
+    gameSpeed = parseFloat(e.target.value);
+    document.getElementById('val-speed').innerText = gameSpeed.toFixed(1);
+};
+
+const btnInv = document.getElementById('btn-inv-yaw');
+btnInv.onclick = () => {
+    const isNormal = solver.toggleYawInversion();
+    btnInv.innerText = isNormal ? "Yaw: Normal" : "Yaw: Inverted";
+    btnInv.className = isNormal ? "toggle-btn active" : "toggle-btn inverted";
+};
+
+const doRecenter = () => solver.recenter();
+document.getElementById('btn-recenter').onclick = doRecenter;
+window.addEventListener('keydown', (e) => {
+    if(e.code === 'Space') doRecenter();
+    if(e.code === 'Escape') {
+        const m = document.getElementById('menu-container');
+        m.style.display = (m.style.display==='none') ? 'flex' : 'none';
+    }
+});
+
+async function readLoop() {
+    const textDecoder = new TextDecoderStream();
+    port.readable.pipeTo(textDecoder.writable);
+    const reader = textDecoder.readable.getReader();
+    let buffer = "";
+    while (keepReading) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+            try {
+                const json = JSON.parse(line);
+                if (json.type === "imu" && json.quat) solver.updateRaw(...json.quat);
+            } catch (e) {}
+        }
+    }
+}
+window.onresize = () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+};
+</script>
+</body>
+</html>
