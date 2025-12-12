@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NeuroMotion | Clinical Rehab Hub</title>
+    <style>
+        :root {
+            --bg-color: #101214;
+            --panel-color: #1c1f24;
+            --primary: #00e5ff;
+            --accent: #ff0055;
+            --text-main: #ffffff;
+            --text-sub: #a0aab5;
+        }
+        body { margin: 0; background: var(--bg-color); color: var(--text-main); font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; overflow: hidden; }
+        
+        /* UTILS */
+        .screen { display: none; height: 100vh; width: 100vw; flex-direction: column; align-items: center; justify-content: center; position: absolute; top: 0; left: 0; }
+        .screen.active { display: flex; }
+        .panel { background: var(--panel-color); padding: 40px; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); text-align: center; max-width: 900px; width: 90%; }
+        
+        /* TYPOGRAPHY */
+        h1 { margin: 0 0 10px 0; font-size: 2.5rem; letter-spacing: -1px; background: linear-gradient(90deg, #fff, var(--primary)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        h2 { font-size: 1.1rem; color: var(--text-sub); font-weight: 400; margin-bottom: 30px; }
+        h3 { margin: 0 0 5px 0; font-size: 1.2rem; }
+        p { color: #889; font-size: 0.9rem; line-height: 1.5; margin-bottom: 15px; }
+
+        /* INTERACTIVE GRID */
+        .game-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; width: 100%; margin-top: 20px; }
+        .game-card { 
+            background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); padding: 20px; border-radius: 12px;
+            transition: all 0.2s ease; cursor: pointer; text-align: left; position: relative; overflow: hidden;
+        }
+        .game-card:hover { transform: translateY(-5px); border-color: var(--primary); background: rgba(0, 229, 255, 0.05); }
+        .game-card::after { content: 'PLAY'; position: absolute; bottom: 20px; right: 20px; font-weight: bold; color: var(--primary); opacity: 0; transition: opacity 0.2s; }
+        .game-card:hover::after { opacity: 1; }
+        .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; margin-bottom: 10px; text-transform: uppercase; }
+        
+        /* CONTROLS */
+        button {
+            background: #2a2d35; border: 1px solid #444; color: #fff; padding: 12px 24px; font-size: 14px; 
+            border-radius: 6px; cursor: pointer; transition: all 0.2s; font-weight: 600; letter-spacing: 0.5px;
+        }
+        button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+        button.primary { background: var(--primary); color: #000; border: none; }
+        button.primary:hover { background: #00b8cc; box-shadow: 0 0 15px rgba(0, 229, 255, 0.3); }
+
+        /* IN-GAME HUD */
+        #game-ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        #settings-panel {
+            position: absolute; top: 20px; left: 20px; pointer-events: auto; width: 260px;
+            background: rgba(16, 18, 20, 0.85); backdrop-filter: blur(10px); padding: 20px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);
+        }
+        .setting-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 0.85rem; color: #ccc; }
+        input[type=range] { width: 100px; accent-color: var(--primary); }
+        input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--primary); }
+
+        /* CALIBRATION VIZ */
+        #cal-viz { width: 100%; height: 300px; background: #000; border-radius: 8px; margin-bottom: 20px; }
+    </style>
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+</head>
+<body>
+
+<div id="screen-landing" class="screen active">
+    <div class="panel">
+        <h1>NeuroMotion Suite</h1>
+        <p>Connect your IMU sensor to begin the therapy session.</p>
+        <button id="btn-connect" class="primary">Initialize Connection</button>
+        <div id="status-msg" style="margin-top:15px; font-size:0.8rem; color:#666;">Standby</div>
+    </div>
+</div>
+
+<div id="screen-setup" class="screen">
+    <div class="panel">
+        <h1>Setup</h1>
+        <p>Ensure the sensor is secured before proceeding.</p>
+        <div style="display: flex; gap: 20px; justify-content: center; margin-top: 30px;">
+            <button id="btn-load-profile">📂 Load Your Profile</button>
+            <button id="btn-new-cal" class="primary">⚡ New Calibration</button>
+        </div>
+        <input type="file" id="file-input" style="display:none" accept=".json">
+    </div>
+</div>
+
+<div id="screen-calibrate" class="screen">
+    <div class="panel" style="max-width: 600px;">
+        <div id="cal-viz"></div>
+        <h3 id="cal-stage-title" style="color:var(--primary)">Step 1: Yaw Axis</h3>
+        <p id="cal-instruction">Instruction text goes here.</p>
+        <div id="cal-stats" style="display:none; margin-bottom:15px; font-family:monospace; color:#aaa;">
+            Yaw: <span id="stat-yaw">0</span>° | Pitch: <span id="stat-pitch">0</span>°
+        </div>
+        <button id="btn-cal-action" class="primary" style="width:100%">Start Scan</button>
+    </div>
+</div>
+
+<div id="screen-hub" class="screen">
+    <div class="panel">
+        <h1>Therapy Modules</h1>
+        <h2>Select an exercise</h2>
+        
+        <div class="game-grid">
+            <div class="game-card" onclick="app.launch('reach')">
+                <span class="tag" style="background:#4caf50; color:#000;">Stroke / Frozen Shoulder</span>
+                <h3>ROM Reacher</h3>
+                <p>Classic range-of-motion training. Targets appear at random limits to encourage full extension.</p>
+            </div>
+            
+            <div class="game-card" onclick="app.launch('stability')">
+                <span class="tag" style="background:#ff9800; color:#000;">Parkinson's / Tremor</span>
+                <h3>Core Stability</h3>
+                <p>Hold the cursor within the center ring. Resistance to drift and tremor management.</p>
+            </div>
+
+            <div class="game-card" onclick="app.launch('trace')">
+                <span class="tag" style="background:#2196f3; color:#000;">Ataxia / MS</span>
+                <h3>Neuro Tracer</h3>
+                <p>Smooth pursuit tracking. Follow the moving orb to train coordination and fine motor control.</p>
+            </div>
+
+            <div class="game-card" onclick="app.launch('reflex')">
+                <span class="tag" style="background:#e91e63; color:#fff;">TBI / Cognitive</span>
+                <h3>Reflex Sprint</h3>
+                <p>High intensity reaction training. Targets fade quickly to improve processing speed.</p>
+            </div>
+        </div>
+
+        <div style="margin-top: 30px; border-top: 1px solid #333; padding-top: 20px; display:flex; justify-content:space-between;">
+            <button id="btn-save-prof" style="font-size:0.8rem;">Save Calibration Profile</button>
+            <button id="btn-re-cal" style="font-size:0.8rem; background:#331111;" onclick="app.show('setup')">Recalibrate Device</button>
+        </div>
+    </div>
+</div>
+
+<div id="screen-game" class="screen" style="background:#000;">
+    <canvas id="game-canvas"></canvas>
+    
+    <div id="game-ui">
+        <div id="settings-panel">
+            <h3 style="border-bottom:1px solid #333; padding-bottom:10px; margin-bottom:15px;">Configuration</h3>
+            
+            <div class="setting-row">
+                <span>Sensitivity</span>
+                <input type="range" id="gm-sens" min="1" max="5" step="0.1" value="1">
+            </div>
+            <div class="setting-row">
+                <span>Smoothing</span>
+                <input type="range" id="gm-smooth" min="0" max="0.95" step="0.05" value="0.5">
+            </div>
+            <div class="setting-row">
+                <span>Invert Yaw (L/R)</span>
+                <input type="checkbox" id="gm-inv-yaw">
+            </div>
+            <div class="setting-row">
+                <span>Invert Pitch (U/D)</span>
+                <input type="checkbox" id="gm-inv-pitch">
+            </div>
+
+            <button onclick="solver.recenter()" style="width:100%; margin-top:10px; font-size:0.8rem;">Recenter (Spacebar)</button>
+            <button onclick="app.show('hub')" style="width:100%; margin-top:10px; background:#331111; border-color:#522; font-size:0.8rem;">Exit to Hub</button>
+        </div>
+
+        <div style="position:absolute; bottom:30px; left:50%; transform:translateX(-50%); text-align:center;">
+            <div id="game-msg" style="font-size:1.5rem; font-weight:bold; color:#fff; text-shadow:0 2px 10px #000;">Ready</div>
+            <div id="game-score" style="font-size:1rem; color:var(--primary);">Score: 0</div>
+        </div>
+    </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+// =========================================================
+// 1. ROBUST SOLVER (Math Engine)
+// =========================================================
+class RobustSolver {
+    constructor() {
+        this.yawAxis = new THREE.Vector3(0, 1, 0);
+        this.pitchAxis = new THREE.Vector3(1, 0, 0);
+        this.tareQuat = new THREE.Quaternion();
+        this.currentQuat = new THREE.Quaternion();
+        
+        // Calibration
+        this.range = { minYaw: -0.5, maxYaw: 0.5, minPitch: -0.5, maxPitch: 0.5 };
+        this.yawMultiplier = 1.0;
+        this.pitchMultiplier = 1.0;
+        
+        // Settings
+        this.sensitivity = 1.0;
+        this.smoothing = 0.5;
+        this.invertYaw = false;
+        this.invertPitch = false;
+
+        // Internal
+        this._sYaw = 0; this._sPitch = 0; // smoothed values
+        this.axisSamples = [];
+        this.isCalibratingAxes = false;
+        this.isCalibratingRange = false;
+    }
+
+    processStream(w, x, y, z) { this.currentQuat.set(x, y, z, w).normalize(); }
+    recenter() { this.tareQuat.copy(this.currentQuat); this._sYaw = 0; this._sPitch = 0; }
+
+    getRawAngles() {
+        const delta = new THREE.Quaternion().copy(this.tareQuat).invert().multiply(this.currentQuat);
+        const w = Math.max(-1, Math.min(1, delta.w));
+        const angle = 2 * Math.acos(w);
+        if (Math.abs(angle) < 0.0001) return { yaw: 0, pitch: 0 };
+        const s = Math.sqrt(1 - w*w);
+        const axis = new THREE.Vector3(delta.x, delta.y, delta.z).divideScalar(s);
+        return {
+            yaw: angle * axis.dot(this.yawAxis) * this.yawMultiplier,
+            pitch: angle * axis.dot(this.pitchAxis) * this.pitchMultiplier
+        };
+    }
+
+    // Returns {x, y} normalized to [-1, 1] based on calibration & settings
+    getGameCoords() {
+        const raw = this.getRawAngles();
+        // Smoothing
+        const alpha = 1 - this.smoothing;
+        this._sYaw += alpha * (raw.yaw - this._sYaw);
+        this._sPitch += alpha * (raw.pitch - this._sPitch);
+
+        // Normalize
+        const yCenter = (this.range.maxYaw + this.range.minYaw) / 2;
+        const ySpan = (this.range.maxYaw - this.range.minYaw) / 2;
+        const pCenter = (this.range.maxPitch + this.range.minPitch) / 2;
+        const pSpan = (this.range.maxPitch - this.range.minPitch) / 2;
+
+        let nx = (this._sYaw - yCenter) / Math.max(0.001, ySpan);
+        let ny = (this._sPitch - pCenter) / Math.max(0.001, pSpan);
+
+        // Sensitivity
+        nx *= this.sensitivity; ny *= this.sensitivity;
+
+        // Invert (Logic: Invert result so max physical limit = max screen limit)
+        if (this.invertYaw) nx *= -1;
+        if (this.invertPitch) ny *= -1;
+
+        return { x: Math.max(-1, Math.min(1, nx)), y: Math.max(-1, Math.min(1, ny)) };
+    }
+
+    // Calibration Helpers
+    updateCal() {
+        const raw = this.getRawAngles();
+        if (this.isCalibratingAxes) {
+            const delta = new THREE.Quaternion().copy(this.tareQuat).invert().multiply(this.currentQuat);
+            const theta = 2 * Math.acos(delta.w);
+            if (theta > 0.1) {
+                const s = Math.sqrt(1 - delta.w*delta.w);
+                const axis = new THREE.Vector3(delta.x/s, delta.y/s, delta.z/s);
+                if (this.axisSamples.length > 0 && axis.dot(this.axisSamples[0]) < 0) axis.negate();
+                this.axisSamples.push(axis);
+            }
+        }
+        if (this.isCalibratingRange) {
+            this.range.minYaw = Math.min(this.range.minYaw, raw.yaw);
+            this.range.maxYaw = Math.max(this.range.maxYaw, raw.yaw);
+            this.range.minPitch = Math.min(this.range.minPitch, raw.pitch);
+            this.range.maxPitch = Math.max(this.range.maxPitch, raw.pitch);
+        }
+        return raw;
+    }
+}
+
+// =========================================================
+// 2. APP CONTROLLER
+// =========================================================
+const solver = new RobustSolver();
+let port = null, reader = null;
+
+const app = {
+    mode: null,
+    show: (id) => {
+        document.querySelectorAll('.screen').forEach(e => e.classList.remove('active'));
+        document.getElementById('screen-' + id).classList.add('active');
+        if (id !== 'game') app.mode = null; // Kill game loop if leaving
+    },
+    launch: (mode) => {
+        app.mode = mode;
+        app.show('game');
+        solver.recenter();
+        gameEngine.init(mode);
+    }
+};
+window.app = app; // Expose globally
+
+// =========================================================
+// 3. UI HANDLERS
+// =========================================================
+// Serial
+document.getElementById('btn-connect').onclick = async () => {
+    try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        readSerial();
+        document.getElementById('status-msg').innerText = "Serial Connected";
+        setTimeout(() => app.show('setup'), 500);
+    } catch(e) { alert("Connect failed: " + e); }
+};
+
+// Profile IO
+document.getElementById('btn-new-cal').onclick = () => { initCal3D(); runCalibrationWizard(); app.show('calibrate'); };
+document.getElementById('btn-load-profile').onclick = () => document.getElementById('file-input').click();
+document.getElementById('file-input').onchange = (e) => {
+    const f = e.target.files[0];
+    if(!f) return;
+    const r = new FileReader();
+    r.onload = (ev) => {
+        const d = JSON.parse(ev.target.result);
+        solver.yawAxis.copy(d.yawAxis); solver.pitchAxis.copy(d.pitchAxis);
+        solver.range = d.range; 
+        solver.yawMultiplier = d.yawMultiplier || 1; solver.pitchMultiplier = d.pitchMultiplier || 1;
+        alert("Profile Loaded"); app.show('hub');
+    };
+    r.readAsText(f);
+};
+document.getElementById('btn-save-prof').onclick = () => {
+    const d = { yawAxis: solver.yawAxis, pitchAxis: solver.pitchAxis, range: solver.range, 
+                yawMultiplier: solver.yawMultiplier, pitchMultiplier: solver.pitchMultiplier };
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(d)], {type:"application/json"}));
+    a.download = "patient_profile.json"; a.click();
+};
+
+// Settings
+const bind = (id, prop) => {
+    const el = document.getElementById(id);
+    el.addEventListener('input', (e) => {
+        if(el.type === 'checkbox') solver[prop] = el.checked;
+        else solver[prop] = parseFloat(el.value);
+    });
+};
+bind('gm-sens', 'sensitivity');
+bind('gm-smooth', 'smoothing');
+bind('gm-inv-yaw', 'invertYaw');
+bind('gm-inv-pitch', 'invertPitch');
+window.addEventListener('keydown', (e) => { if(e.code === 'Space') solver.recenter(); });
+
+// =========================================================
+// 4. CALIBRATION WIZARD
+// =========================================================
+function runCalibrationWizard() {
+    let step = 0; let tempYaw = null;
+    const elTitle = document.getElementById('cal-stage-title');
+    const elInst = document.getElementById('cal-instruction');
+    const elBtn = document.getElementById('btn-cal-action');
+    const elStats = document.getElementById('cal-stats');
+    
+    // Reset
+    solver.range = { minYaw:0.1, maxYaw:-0.1, minPitch:0.1, maxPitch:-0.1 };
+    
+    const steps = [
+        { t: "1. Yaw Axis", i: "Sit upright. Click Start, then lean LEFT and RIGHT repeatedly.", act: () => { solver.recenter(); solver.isCalibratingAxes=true; solver.axisSamples=[]; } },
+        { t: "Yaw Done", i: "Processing...", act: () => { tempYaw = solver.stopAxisScan(); } },
+        { t: "2. Pitch Axis", i: "Click Start, then lean FORWARD and BACK repeatedly.", act: () => { solver.recenter(); solver.isCalibratingAxes=true; solver.axisSamples=[]; } },
+        { t: "Pitch Done", i: "Processing...", act: () => { 
+            const p = solver.stopAxisScan(); solver.yawAxis.copy(tempYaw); solver.pitchAxis.copy(p); 
+        } },
+        { t: "3. Range of Motion", i: "CRITICAL: Move to the MAXIMUM comfortable limits in ALL directions.", act: () => { 
+            solver.recenter(); solver.isCalibratingRange=true; elStats.style.display="block"; 
+        } },
+        { t: "Done", i: "Saving...", act: () => { solver.isCalibratingRange=false; app.show('hub'); } }
+    ];
+
+    const updateUI = () => {
+        elTitle.innerText = steps[step].t; elInst.innerText = steps[step].i;
+        if(step%2 === 0) { elBtn.innerText = "Start Scan"; elBtn.style.background = ""; }
+        else { elBtn.innerText = "Stop & Next"; elBtn.style.background = "#ff0055"; }
+    };
+
+    step = 0; updateUI();
+    
+    elBtn.onclick = () => {
+        steps[step].act();
+        step++;
+        if(step < steps.length) updateUI();
+    };
+}
+
+// =========================================================
+// 5. GAME ENGINE
+// =========================================================
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
+let lastTime = 0;
+
+const gameEngine = {
+    state: {},
+    
+    init: (mode) => {
+        gameEngine.resize();
+        gameEngine.state = { score: 0, time: 0, entities: [] };
+        document.getElementById('game-msg').innerText = mode.toUpperCase();
+        
+        // Mode specific setup
+        if(mode === 'reach') gameEngine.spawnReachTarget();
+        if(mode === 'trace') gameEngine.state.tracePhase = 0;
+        if(mode === 'reflex') gameEngine.state.nextSpawn = 2; // 2 seconds delay
+        
+        lastTime = performance.now();
+        requestAnimationFrame(gameEngine.loop);
+    },
+
+    resize: () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    },
+
+    spawnReachTarget: () => {
+        const a = Math.random() * Math.PI * 2;
+        const d = 0.5 + Math.random() * 0.3; // 50-80% of reach
+        gameEngine.state.entities = [{ x: Math.cos(a)*d, y: Math.sin(a)*d, r: 0.1 }];
+    },
+
+    loop: (now) => {
+        if(app.mode === null) return; // Stop loop
+        const dt = (now - lastTime) / 1000;
+        lastTime = now;
+        
+        // Input
+        const inp = solver.getGameCoords(); // {-1 to 1}
+        
+        // Render Prep
+        ctx.fillStyle = "#000"; ctx.fillRect(0,0, canvas.width, canvas.height);
+        const cx = canvas.width/2; const cy = canvas.height/2;
+        const scale = Math.min(cx,cy) * 0.85;
+        const px = cx + inp.x*scale; const py = cy - inp.y*scale;
+
+        // Draw HUD (Grid)
+        ctx.strokeStyle = "#222"; ctx.lineWidth = 2; 
+        ctx.beginPath(); ctx.arc(cx,cy,scale,0,Math.PI*2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cx,cy-10); ctx.lineTo(cx,cy+10); ctx.moveTo(cx-10,cy); ctx.lineTo(cx+10,cy); ctx.stroke();
+
+        // --- GAME LOGIC SWITCH ---
+        if(app.mode === 'reach') gameEngine.logicReach(ctx, cx, cy, scale, px, py, dt);
+        if(app.mode === 'stability') gameEngine.logicStability(ctx, cx, cy, scale, px, py, dt);
+        if(app.mode === 'trace') gameEngine.logicTrace(ctx, cx, cy, scale, px, py, dt);
+        if(app.mode === 'reflex') gameEngine.logicReflex(ctx, cx, cy, scale, px, py, dt);
+
+        // Draw Player Cursor
+        ctx.shadowBlur = 15; ctx.shadowColor = "#00e5ff";
+        ctx.fillStyle = "#00e5ff";
+        ctx.beginPath(); ctx.arc(px, py, 12, 0, Math.PI*2); ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // UI Update
+        document.getElementById('game-score').innerText = "Score: " + Math.floor(gameEngine.state.score);
+        
+        requestAnimationFrame(gameEngine.loop);
+    },
+
+    // --- GAME 1: REACH ---
+    logicReach: (ctx, cx, cy, sc, px, py, dt) => {
+        const t = gameEngine.state.entities[0];
+        const tx = cx + t.x*sc; const ty = cy - t.y*sc;
+        
+        // Draw Target
+        ctx.fillStyle = "rgba(76, 175, 80, 0.4)";
+        ctx.beginPath(); ctx.arc(tx, ty, t.r*sc, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = "#4caf50"; ctx.stroke();
+
+        // Hit Check
+        const dist = Math.hypot(px-tx, py-ty);
+        if(dist < t.r*sc) {
+            gameEngine.state.score += 100;
+            gameEngine.spawnReachTarget();
+        }
+    },
+
+    // --- GAME 2: STABILITY ---
+    logicStability: (ctx, cx, cy, sc, px, py, dt) => {
+        const dist = Math.hypot(px-cx, py-cy);
+        const limit = 0.15 * sc; // 15% zone
+        
+        // Draw Zone
+        ctx.beginPath(); ctx.arc(cx, cy, limit, 0, Math.PI*2);
+        if(dist < limit) {
+            ctx.fillStyle = "rgba(0,255,0,0.2)"; ctx.fill(); ctx.strokeStyle="#0f0";
+            gameEngine.state.score += dt * 10; // 10 pts per second
+            document.getElementById('game-msg').innerText = "HOLDING...";
+        } else {
+            ctx.fillStyle = "rgba(255,0,0,0.2)"; ctx.fill(); ctx.strokeStyle="#f00";
+            document.getElementById('game-msg').innerText = "RETURN TO CENTER";
+        }
+        ctx.stroke();
+    },
+
+    // --- GAME 3: TRACE (Coordination) ---
+    logicTrace: (ctx, cx, cy, sc, px, py, dt) => {
+        gameEngine.state.tracePhase += dt * 0.5; // Speed
+        const angle = gameEngine.state.tracePhase;
+        // Orbiting Target
+        const tx = cx + Math.cos(angle) * (sc*0.6);
+        const ty = cy - Math.sin(angle) * (sc*0.6);
+        
+        // Draw Path (Visual Guide)
+        ctx.strokeStyle = "#333"; ctx.setLineDash([5, 5]);
+        ctx.beginPath(); ctx.arc(cx, cy, sc*0.6, 0, Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+
+        // Draw Orb
+        ctx.fillStyle = "#2196f3"; 
+        ctx.beginPath(); ctx.arc(tx, ty, 20, 0, Math.PI*2); ctx.fill();
+
+        // Check proximity
+        const dist = Math.hypot(px-tx, py-ty);
+        if(dist < 50) {
+            gameEngine.state.score += dt * 20;
+            ctx.strokeStyle = "#fff"; ctx.lineWidth=3; ctx.stroke(); // Highlight
+        }
+    },
+
+    // --- GAME 4: REFLEX (Reaction) ---
+    logicReflex: (ctx, cx, cy, sc, px, py, dt) => {
+        gameEngine.state.nextSpawn -= dt;
+        
+        // Spawn
+        if(gameEngine.state.nextSpawn <= 0) {
+            const a = Math.random()*6.28; const d = 0.4 + Math.random()*0.4;
+            gameEngine.state.entities.push({
+                x: Math.cos(a)*d, y: Math.sin(a)*d, 
+                life: 2.0, maxLife: 2.0 // 2 seconds to hit
+            });
+            gameEngine.state.nextSpawn = 1.5; // New one every 1.5s
+        }
+
+        // Process Entities
+        gameEngine.state.entities.forEach((e, i) => {
+            e.life -= dt;
+            if(e.life <= 0) { gameEngine.state.entities.splice(i, 1); return; }
+
+            const tx = cx + e.x*sc; const ty = cy - e.y*sc;
+            const rad = 40 * (e.life / e.maxLife); // Shrinking
+
+            ctx.fillStyle = `rgba(233, 30, 99, ${e.life/e.maxLife})`;
+            ctx.beginPath(); ctx.arc(tx, ty, rad, 0, Math.PI*2); ctx.fill();
+
+            if(Math.hypot(px-tx, py-ty) < rad) {
+                gameEngine.state.score += 50;
+                gameEngine.state.entities.splice(i, 1); // Remove hit
+            }
+        });
+    }
+};
+
+window.onresize = gameEngine.resize;
+
+// =========================================================
+// 6. SERIAL & CAL VIZ SUPPORT
+// =========================================================
+async function readSerial() {
+    const td = new TextDecoderStream(); port.readable.pipeTo(td.writable);
+    const r = td.readable.getReader();
+    let buff = "";
+    while(true) {
+        try {
+            const {value, done} = await r.read();
+            if(done) break;
+            buff += value; const lines = buff.split('\n'); buff = lines.pop();
+            for(const l of lines) {
+                if(!l.trim()) continue;
+                try { 
+                    const j = JSON.parse(l); 
+                    if(j.type==='imu') solver.processStream(...j.quat); 
+                } catch(e){}
+            }
+        } catch(e) { break; }
+    }
+}
+
+// 3D Visualization for Calibration
+let ren3d, scn3d, cam3d, cone;
+function initCal3D() {
+    const c = document.getElementById('cal-viz');
+    if(c.children.length) return;
+    ren3d = new THREE.WebGLRenderer({antialias:true});
+    ren3d.setSize(c.clientWidth, c.clientHeight);
+    c.appendChild(ren3d.domElement);
+    scn3d = new THREE.Scene(); scn3d.background = new THREE.Color(0x000);
+    cam3d = new THREE.PerspectiveCamera(50, c.clientWidth/c.clientHeight, 0.1, 100);
+    cam3d.position.z = 4;
+    const g = new THREE.GridHelper(10,10,0x333,0x111); g.rotateX(1.57); scn3d.add(g);
+    cone = new THREE.Mesh(new THREE.ConeGeometry(0.2,1,16), new THREE.MeshBasicMaterial({color:0x00e5ff}));
+    cone.rotateX(1.57); scn3d.add(cone);
+    loop3D();
+}
+function loop3D() {
+    requestAnimationFrame(loop3D);
+    const ang = solver.updateCal();
+    cone.rotation.y = -ang.yaw; cone.rotation.x = -ang.pitch;
+    
+    // Update Stats Text
+    if(solver.isCalibratingRange) {
+        document.getElementById('stat-yaw').innerText = (ang.yaw*57.3).toFixed(0);
+        document.getElementById('stat-pitch').innerText = (ang.pitch*57.3).toFixed(0);
+    }
+    ren3d.render(scn3d, cam3d);
+}
+</script>
+</body>
+</html>

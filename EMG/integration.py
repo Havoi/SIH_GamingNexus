@@ -258,6 +258,21 @@ def apply_dark_ttk_style(root):
     style.configure('TEntry', fieldbackground=entry_bg, foreground=fg)
     style.configure('TFrame', background=bg)
     root.configure(bg=bg)
+        # --- Dark theme for Combobox ---
+    style.configure(
+        "TCombobox",
+        fieldbackground='#0b0d10',   # text-entry background
+        background='#172027',        # arrow button background
+        foreground='#e6eef6'         # text color
+    )
+
+    # Dropdown list styling (requires map)
+    style.map(
+        'TCombobox',
+        fieldbackground=[('readonly', '#0b0d10'), ('!disabled', '#0b0d10')],
+        foreground=[('readonly', '#e6eef6'), ('!disabled', '#e6eef6')],
+        background=[('readonly', '#0b0d10'), ('!disabled', '#0b0d10')]
+    )
 
 
 class EMGGUI(tk.Tk):
@@ -300,6 +315,43 @@ class EMGGUI(tk.Tk):
 
         self.after(40, self._process_queue)
 
+    def _on_model_type_change(self, event=None):
+        """
+        Automatically updates model, scaler and label encoder paths
+        when the user selects a noise-level model.
+        """
+        selected = self.model_type_var.get()
+
+        base = os.path.join(os.path.dirname(__file__), "models")
+
+        if selected == "No Noise":
+            # Picking the *default clean* model set
+            self.model_var.set(os.path.join(base, "No_noise models", "emg_mlp_model_clean.joblib"))
+            self.scaler_var.set(os.path.join(base, "No_noise models", "emg_scaler_clean.pkl"))
+            self.le_var.set(os.path.join(base, "No_noise models", "emg_label_encoder_clean.pkl"))
+
+        elif selected == "Medium Noise":
+            self.model_var.set(os.path.join(base, "Noisy models", "emg_mlp_model_clean_noisy.joblib"))
+            self.scaler_var.set(os.path.join(base, "Noisy models", "emg_scaler_clean_noisy.pkl"))
+            self.le_var.set(os.path.join(base, "Noisy models", "emg_label_encoder_clean_noisy.pkl"))
+
+        elif selected == "Extremely Noisy":
+            self.model_var.set(os.path.join(base, "Extremely noisy model", "emg_mlp_model_clean_extnoisy.joblib"))
+            self.scaler_var.set(os.path.join(base, "Extremely noisy model", "emg_scaler_clean_extnoisy.pkl"))
+            self.le_var.set(os.path.join(base, "Extremely noisy model", "emg_label_encoder_clean_extnoisy.pkl"))
+
+        else:
+            # Fallback: no change
+            return
+
+        # Log the change in the GUI status window
+        self._log(f"Model set switched to: {selected}")
+
+    
+    
+    
+    
+    
     def _build_controls(self):
         frm = ttk.Frame(self)
         frm.pack(side=tk.TOP, fill=tk.X, padx=8, pady=6)
@@ -316,20 +368,39 @@ class EMGGUI(tk.Tk):
         self.baud_var = tk.StringVar(value=str(DEFAULT_BAUD))
         ttk.Entry(left, textvariable=self.baud_var, width=8).grid(row=0, column=3)
 
-        ttk.Label(left, text="Model (MLP):").grid(row=1, column=0, sticky=tk.W)
+        # Add Model Selector Dropdown here
+        ttk.Label(left, text="Model Type:").grid(row=1, column=0, sticky=tk.W)
+        self.model_type_var = tk.StringVar(value="No Noise")
+        self.model_type_combobox = ttk.Combobox(
+            left,
+            textvariable=self.model_type_var,
+            values=["No Noise", "Medium Noise", "Extremely Noisy"],
+            width=20,
+            state="readonly"
+        )
+        self.model_type_combobox.grid(row=1, column=1, columnspan=3, sticky=tk.W)
+        self.model_type_combobox.bind("<<ComboboxSelected>>", self._on_model_type_change)
+        # checkbox: Automatic Model Selector
+        self.auto_model_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(left, text="Automatic Model Selector", variable=self.auto_model_var).grid(row=1, column=2, padx=(100,0))
+
+
+        # model/scaler/label encoder files
+        ttk.Label(left, text="Model (MLP):").grid(row=2, column=0, sticky=tk.W)
         self.model_var = tk.StringVar(value=DEFAULT_MODEL)
-        ttk.Entry(left, textvariable=self.model_var, width=40).grid(row=1, column=1, columnspan=3, sticky=tk.W)
-        ttk.Button(left, text="Browse", command=self._browse_model).grid(row=1, column=4, padx=4)
+        ttk.Entry(left, textvariable=self.model_var, width=40).grid(row=2, column=1, columnspan=3, sticky=tk.W)
+        ttk.Button(left, text="Browse", command=self._browse_model).grid(row=2, column=4, padx=4)
 
-        ttk.Label(left, text="Scaler:").grid(row=2, column=0, sticky=tk.W)
+        ttk.Label(left, text="Scaler:").grid(row=3, column=0, sticky=tk.W)
         self.scaler_var = tk.StringVar(value=DEFAULT_SCALER)
-        ttk.Entry(left, textvariable=self.scaler_var, width=40).grid(row=2, column=1, columnspan=3, sticky=tk.W)
-        ttk.Button(left, text="Browse", command=self._browse_scaler).grid(row=2, column=4, padx=4)
+        ttk.Entry(left, textvariable=self.scaler_var, width=40).grid(row=3, column=1, columnspan=3, sticky=tk.W)
+        ttk.Button(left, text="Browse", command=self._browse_scaler).grid(row=3, column=4, padx=4)
 
-        ttk.Label(left, text="LabelEnc:").grid(row=3, column=0, sticky=tk.W)
+        ttk.Label(left, text="LabelEnc:").grid(row=4, column=0, sticky=tk.W)
         self.le_var = tk.StringVar(value=DEFAULT_LE)
-        ttk.Entry(left, textvariable=self.le_var, width=40).grid(row=3, column=1, columnspan=3, sticky=tk.W)
-        ttk.Button(left, text="Browse", command=self._browse_le).grid(row=3, column=4, padx=4)
+        ttk.Entry(left, textvariable=self.le_var, width=40).grid(row=4, column=1, columnspan=3, sticky=tk.W)
+        ttk.Button(left, text="Browse", command=self._browse_le).grid(row=4, column=4, padx=4)
+        
 
         # middle: runtime controls
         middle = ttk.Frame(frm)
